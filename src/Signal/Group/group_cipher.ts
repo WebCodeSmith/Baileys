@@ -49,17 +49,30 @@ export class GroupCipher {
 	public async decrypt(senderKeyMessageBytes: Uint8Array): Promise<Uint8Array> {
 		const record = await this.senderKeyStore.loadSenderKey(this.senderKeyName)
 		if (!record) {
-			throw new Error('No SenderKeyRecord found for decryption')
+			throw new Error(`No SenderKeyRecord found for decryption: ${this.senderKeyName.toString()}`)
 		}
 
 		const senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes)
-		let senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId())
+		const messageKeyId = senderKeyMessage.getKeyId()
+		let senderKeyState = record.getSenderKeyState(messageKeyId)
 		
-		// Fallback: try to get the latest sender key state if specific keyId not found
+		// Enhanced fallback logic with detailed error information
 		if (!senderKeyState) {
+			// Try to get the latest sender key state
 			senderKeyState = record.getSenderKeyState()
 			if (!senderKeyState) {
-				throw new Error('No session found to decrypt message')
+				// Provide detailed debugging information
+				const senderKeyName = this.senderKeyName.toString()
+				const recordIsEmpty = record.isEmpty()
+				const serializedRecord = JSON.stringify(record.serialize())
+				
+				throw new Error(
+					`No session found to decrypt message. ` +
+					`SenderKeyName: ${senderKeyName}, ` +
+					`MessageKeyId: ${messageKeyId}, ` +
+					`RecordEmpty: ${recordIsEmpty}, ` +
+					`RecordStates: ${serializedRecord}`
+				)
 			}
 		}
 

@@ -27,7 +27,12 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				throw new Error('Group ID is required for sender key distribution message')
 			}
 
+			if (!item.axolotlSenderKeyDistributionMessage) {
+				throw new Error('Missing axolotlSenderKeyDistributionMessage in sender key distribution message')
+			}
+
 			const senderName = jidToSignalSenderKeyName(item.groupId, authorJid)
+			const senderNameStr = senderName.toString()
 
 			const senderMsg = new SenderKeyDistributionMessage(
 				null,
@@ -36,14 +41,18 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				null,
 				item.axolotlSenderKeyDistributionMessage
 			)
-			const senderNameStr = senderName.toString()
 
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-				if (!senderKey) {
-					await storage.storeSenderKey(senderName, new SenderKeyRecord())
+				// Load existing sender key record
+				const { [senderNameStr]: existingSenderKey } = await auth.keys.get('sender-key', [senderNameStr])
+				
+				// Always ensure we have a record, even if empty
+				if (!existingSenderKey) {
+					const newRecord = new SenderKeyRecord()
+					await storage.storeSenderKey(senderName, newRecord)
 				}
 
+				// Process the sender key distribution message
 				await builder.process(senderName, senderMsg)
 			})
 		},

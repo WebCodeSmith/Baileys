@@ -1,6 +1,8 @@
 import { makeLibSignalRepository } from '../Signal/libsignal'
 import { SignalAuthState, SignalDataTypeMap } from '../Types'
 import { Curve, generateRegistrationId, generateSignalPubKey, signedKeyPair } from '../Utils'
+import { addTransactionCapability } from '../Utils/auth-utils'
+import { ILogger } from '../Utils/logger'
 
 describe('Signal Tests', () => {
 	it('should correctly encrypt/decrypt 1 message', async () => {
@@ -127,32 +129,50 @@ function makeTestAuthState(): SignalAuthState {
 	const identityKey = Curve.generateKeyPair()
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const store: { [_: string]: any } = {}
+	
+	const logger: ILogger = {
+		trace: () => {},
+		debug: () => {},
+		info: () => {},
+		warn: () => {},
+		error: () => {},
+		child: () => logger,
+		level: 'info'
+	}
+	
+	const baseKeys = {
+		async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
+			const data: { [id: string]: SignalDataTypeMap[T] } = {}
+			for (const id of ids) {
+				const item = store[getUniqueId(type, id)]
+				if (typeof item !== 'undefined') {
+					data[id] = item
+				}
+			}
+
+			return data
+		},
+		async set(data: any) {
+			for (const type in data) {
+				for (const id in data[type]) {
+					store[getUniqueId(type, id)] = data[type][id]
+				}
+			}
+		}
+	}
+	
+	const keysWithTransaction = addTransactionCapability(baseKeys, logger, {
+		maxCommitRetries: 5,
+		delayBetweenTriesMs: 200
+	})
+	
 	return {
 		creds: {
 			signedIdentityKey: identityKey,
 			registrationId: generateRegistrationId(),
 			signedPreKey: signedKeyPair(identityKey, 1)
 		},
-		keys: {
-			get(type, ids) {
-				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
-				for (const id of ids) {
-					const item = store[getUniqueId(type, id)]
-					if (typeof item !== 'undefined') {
-						data[id] = item
-					}
-				}
-
-				return data
-			},
-			set(data) {
-				for (const type in data) {
-					for (const id in data[type]) {
-						store[getUniqueId(type, id)] = data[type][id]
-					}
-				}
-			}
-		}
+		keys: keysWithTransaction
 	}
 
 	function getUniqueId(type: string, id: string) {

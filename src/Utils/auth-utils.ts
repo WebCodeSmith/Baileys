@@ -373,8 +373,16 @@ export const addTransactionCapability = (
 							await queueSenderKeyOperation(senderKeyName, async () => {
 								logger.info({ senderKeyName }, 'fetching sender key in transaction')
 								const result = await state.get(type, [senderKeyName])
+								
 								// Update transaction cache
 								transactionCache[type] ||= {}
+								
+								// If no result, ensure we have an empty record placeholder
+								if (!result[senderKeyName]) {
+									logger.info({ senderKeyName }, 'no sender key found, creating empty record placeholder')
+									result[senderKeyName] = Buffer.from(JSON.stringify([]), 'utf-8') as any
+								}
+								
 								Object.assign(transactionCache[type]!, result)
 								logger.info({ senderKeyName, hasResult: !!result[senderKeyName] }, 'sender key fetch complete')
 							})

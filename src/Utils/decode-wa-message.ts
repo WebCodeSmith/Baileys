@@ -150,7 +150,13 @@ export const decryptMessageNode = (
 		author,
 		async decrypt() {
 			let decryptables = 0
+			let senderKeyDistributionMessages: Array<{
+				authorJid: string;
+				item: any;
+			}> = []
+			
 			if (Array.isArray(stanza.content)) {
+				// First pass: decrypt messages and collect sender key distribution messages
 				for (const { tag, attrs, content } of stanza.content) {
 					if (tag === 'verified_name' && content instanceof Uint8Array) {
 						const cert = proto.VerifiedNameCertificate.decode(content)
@@ -200,16 +206,18 @@ export const decryptMessageNode = (
 							e2eType !== 'plaintext' ? unpadRandomMax16(msgBuffer) : msgBuffer
 						)
 						msg = msg.deviceSentMessage?.message || msg
+						
+						// Collect sender key distribution messages for batch processing
 						if (msg.senderKeyDistributionMessage) {
-							//eslint-disable-next-line max-depth
-							try {
-								await repository.processSenderKeyDistributionMessage({
-									authorJid: author,
-									item: msg.senderKeyDistributionMessage
-								})
-							} catch (err) {
-								logger.error({ key: fullMessage.key, err }, 'failed to decrypt message')
-							}
+							senderKeyDistributionMessages.push({
+								authorJid: author,
+								item: msg.senderKeyDistributionMessage
+							})
+							logger.trace({ 
+								authorJid: author, 
+								groupId: msg.senderKeyDistributionMessage.groupId,
+								keyId: fullMessage.key.id
+							}, 'collected sender key distribution message')
 						}
 
 						if (fullMessage.message) {
@@ -221,6 +229,33 @@ export const decryptMessageNode = (
 						logger.error({ key: fullMessage.key, err }, 'failed to decrypt message')
 						fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 						fullMessage.messageStubParameters = [err.message]
+					}
+				}
+				
+				// Second pass: process all sender key distribution messages
+				for (const skdm of senderKeyDistributionMessages) {
+					try {
+						logger.trace({ 
+							authorJid: skdm.authorJid, 
+							groupId: skdm.item.groupId,
+							keyId: fullMessage.key.id,
+							hasAxolotlMessage: !!skdm.item.axolotlSenderKeyDistributionMessage
+						}, 'processing sender key distribution message')
+						
+						await repository.processSenderKeyDistributionMessage(skdm)
+						
+						logger.trace({ 
+							authorJid: skdm.authorJid, 
+							groupId: skdm.item.groupId,
+							keyId: fullMessage.key.id
+						}, 'sender key distribution message processed successfully')
+					} catch (err) {
+						logger.error({ 
+							key: fullMessage.key, 
+							err, 
+							authorJid: skdm.authorJid,
+							groupId: skdm.item.groupId 
+						}, 'failed to process sender key distribution message')
 					}
 				}
 			}
