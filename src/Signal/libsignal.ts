@@ -100,6 +100,21 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				}
 
 				const senderKeyDistributionMessage = await builder.create(senderName)
+				
+				// Before encrypting, store the current message key for iteration 0
+				// This allows us to decrypt our own echo messages
+				const preEncryptRecord = await storage.loadSenderKey(senderName)
+				const preEncryptState = preEncryptRecord.getSenderKeyState()
+				if (preEncryptState) {
+					const currentChainKey = preEncryptState.getSenderChainKey()
+					if (currentChainKey.getIteration() === 0) {
+						// Store the message key for iteration 0 before encryption advances the counter
+						const messageKeyForIteration0 = currentChainKey.getSenderMessageKey()
+						preEncryptState.addSenderMessageKey(messageKeyForIteration0)
+						await storage.storeSenderKey(senderName, preEncryptRecord)
+					}
+				}
+				
 				const session = new GroupCipher(storage, senderName)
 				const ciphertext = await session.encrypt(data)
 
