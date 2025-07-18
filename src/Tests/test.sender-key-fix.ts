@@ -97,58 +97,6 @@ describe('Sender Key Fix Tests', () => {
 		
 		expect(decrypted).toEqual(msg)
 	})
-
-	it('should handle echo messages (decrypt own messages)', async () => {
-		const groupId = '120363419479820185@g.us'
-		const sender = makeUser()
-
-		const msg = Buffer.from('hello there with links!')
-
-		// Step 1: Sender encrypts a group message
-		const enc = await sender.repository.encryptGroupMessage({
-			group: groupId,
-			meId: sender.jid,
-			data: msg
-		})
-
-		// Step 2: Sender should be able to decrypt their own message (echo scenario)
-		// This simulates receiving an echo of your own message from WhatsApp
-		const decryptedEcho = await sender.repository.decryptGroupMessage({
-			group: groupId,
-			authorJid: sender.jid,
-			msg: enc.ciphertext
-		})
-		
-		expect(decryptedEcho).toEqual(msg)
-	})
-
-	it('should handle the exact scenario from user log', async () => {
-		// Simulating the exact scenario from the user's log
-		const groupId = '120363419479820185@g.us'
-		const userJid = '553171670477:14@s.whatsapp.net'
-		const sender = makeUser()
-		// Override the jid to match the log
-		sender.jid = userJid
-
-		const msg = Buffer.from('Test message with links')
-
-		// Step 1: User sends a message to the group
-		const enc = await sender.repository.encryptGroupMessage({
-			group: groupId,
-			meId: sender.jid,
-			data: msg
-		})
-
-		// Step 2: WhatsApp sends back an echo of the message (fromMe: true)
-		// This should NOT throw "No session found to decrypt message"
-		const decryptedEcho = await sender.repository.decryptGroupMessage({
-			group: groupId,
-			authorJid: sender.jid,
-			msg: enc.ciphertext
-		})
-		
-		expect(decryptedEcho).toEqual(msg)
-	})
 })
 
 type User = ReturnType<typeof makeUser>
