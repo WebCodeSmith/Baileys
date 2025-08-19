@@ -311,6 +311,18 @@ export const addTransactionCapability = (
 	// Per-sender-key-name mutexes for fine-grained serialization
 	const senderKeyMutexes = new Map<string, Mutex>()
 
+	// Track last usage time for sender key mutexes (in milliseconds)
+	const senderKeyMutexLastUsed = new Map<string, number>()
+
+	// Mutex expiration time (1 hour in milliseconds)
+	const MUTEX_EXPIRATION_TIME = 60 * 60 * 1000 // 1 hour
+
+	// Cleanup interval (check every 30 minutes)
+	const CLEANUP_INTERVAL = 30 * 60 * 1000 // 30 minutes
+
+	// Cleanup timer reference
+	let cleanupTimer: NodeJS.Timeout | null = null
+
 	// Global transaction mutex
 	const transactionMutex = new Mutex()
 
@@ -321,6 +333,48 @@ export const addTransactionCapability = (
 	let mutations: SignalDataSet = {}
 
 	let transactionsInProgress = 0
+
+	// Cleanup expired sender key mutexes
+	function cleanupExpiredSenderKeyMutexes(): void {
+		const now = Date.now()
+		const expiredKeys: string[] = []
+
+		for (const [senderKeyName, lastUsed] of senderKeyMutexLastUsed.entries()) {
+			if (now - lastUsed > MUTEX_EXPIRATION_TIME) {
+				expiredKeys.push(senderKeyName)
+			}
+		}
+
+		if (expiredKeys.length > 0) {
+			for (const senderKeyName of expiredKeys) {
+				senderKeyMutexes.delete(senderKeyName)
+				senderKeyMutexLastUsed.delete(senderKeyName)
+			}
+
+			logger.info({
+				expiredCount: expiredKeys.length,
+				remainingCount: senderKeyMutexes.size
+			}, 'cleaned up expired sender key mutexes')
+		}
+	}
+
+	// Start periodic cleanup
+	function startCleanupTimer(): void {
+		if (cleanupTimer) return
+
+		cleanupTimer = setInterval(() => {
+			cleanupExpiredSenderKeyMutexes()
+		}, CLEANUP_INTERVAL)
+
+		// Ensure cleanup happens on process exit
+		if (typeof process !== 'undefined' && process.on) {
+			process.on('exit', () => {
+				if (cleanupTimer) {
+					clearInterval(cleanupTimer)
+				}
+			})
+		}
+	}
 
 	// Get or create a mutex for a specific key type
 	function getKeyTypeMutex(type: string): Mutex {
@@ -336,11 +390,17 @@ export const addTransactionCapability = (
 
 	// Get or create a mutex for a specific sender key name
 	function getSenderKeyMutex(senderKeyName: string): Mutex {
+		// Update last used time
+		senderKeyMutexLastUsed.set(senderKeyName, Date.now())
+
 		let mutex = senderKeyMutexes.get(senderKeyName)
 		if (!mutex) {
 			mutex = new Mutex()
 			senderKeyMutexes.set(senderKeyName, mutex)
 			logger.info({ senderKeyName }, 'created new sender key mutex')
+
+			// Start cleanup timer when first mutex is created
+			startCleanupTimer()
 		}
 
 		return mutex
