@@ -54,7 +54,7 @@ export class GroupCipher {
 
 		const senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes)
 		let senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId())
-		
+
 		// Fallback: try to get the latest sender key state if specific keyId not found
 		if (!senderKeyState) {
 			senderKeyState = record.getSenderKeyState()

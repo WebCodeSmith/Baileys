@@ -79,6 +79,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		sendPeerDataOperationMessage
 	} = sock
 
+	const PENDING_MESSAGE_DECRYPTIONS = new Map<
+		string,
+		{
+			node: BinaryNode
+			retryCount: number
+			timestamp: number
+		}
+	>()
+	const MAX_DECRYPT_RETRY_COUNT = 3
+	const DECRYPT_RETRY_DELAY = 2000
+
 	/** this mutex ensures that each retryRequest will wait for the previous one to finish */
 	const retryMutex = makeMutex()
 
@@ -181,7 +192,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 		const { account, signedPreKey, signedIdentityKey: identityKey } = authState.creds
 
-		if (retryCount === 1) {
+		if (retryCount <= 2) {
 			//request a resend via phone
 			const msgId = await requestPlaceholderResend(msgKey)
 			logger.debug(`sendRetryRequest: requested placeholder resend for message ${msgId}`)
@@ -247,7 +258,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			await sendNode(receipt)
 
 			logger.info({ msgAttrs: node.attrs, retryCount }, 'sent retry receipt')
-		})
+		}, authState?.creds?.me?.id || 'sendRetryRequest')
 	}
 
 	const handleEncryptNotification = async (node: BinaryNode) => {
@@ -791,88 +802,192 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			}
 		}
 
-		const {
-			fullMessage: msg,
-			category,
-			author,
-			decrypt
-		} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger)
-
-		if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
-			msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
-		}
-
-		if (
-			msg.message?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.SHARE_PHONE_NUMBER &&
-			node.attrs.sender_pn
-		) {
-			ev.emit('chats.phoneNumberShare', { lid: node.attrs.from, jid: node.attrs.sender_pn })
-		}
+		// Criar chave única para esta mensagem
+		const messageKey = `${node.attrs.from}_${node.attrs.id}_${node.attrs.participant || ''}`
 
 		try {
+			const {
+				fullMessage: msg,
+				category,
+				author,
+				decrypt
+			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger)
+
+			if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
+				msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
+			}
+
+			if (
+				msg.message?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.SHARE_PHONE_NUMBER &&
+				node.attrs.sender_pn
+			) {
+				ev.emit('chats.phoneNumberShare', { lid: node.attrs.from, jid: node.attrs.sender_pn })
+			}
+
 			await Promise.all([
 				processingMutex.mutex(async () => {
-					await decrypt()
-					// message failed to decrypt
-					if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
-						if (msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {
-							return sendMessageAck(node, NACK_REASONS.ParsingError)
+					try {
+						await decrypt()
+
+						// Remove da queue de retry se descriptografia foi bem sucedida
+						if (PENDING_MESSAGE_DECRYPTIONS.has(messageKey)) {
+							PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
+							console.warn({ messageKey }, 'Message decrypted successfully after retry')
 						}
 
-						retryMutex.mutex(async () => {
-							if (ws.isOpen) {
-								if (getBinaryNodeChild(node, 'unavailable')) {
-									return
-								}
+						// message failed to decrypt
+						if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
+							if (msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {
+								return sendMessageAck(node, NACK_REASONS.ParsingError)
+							}
 
-								const encNode = getBinaryNodeChild(node, 'enc')
-								await sendRetryRequest(node, !encNode)
-								if (retryRequestDelayMs) {
-									await delay(retryRequestDelayMs)
+							await retryMutex.mutex(async () => {
+								if (ws.isOpen) {
+									if (getBinaryNodeChild(node, 'unavailable')) {
+										return
+									}
+
+									const encNode = getBinaryNodeChild(node, 'enc')
+
+									console.warn({ messageKey, node }, 'Message decryption failed, sending retry request')
+									
+									await sendRetryRequest(node, !encNode)
+									if (retryRequestDelayMs) {
+										await delay(retryRequestDelayMs)
+									}
+								} else {
+									logger.debug({ node }, 'connection closed, ignoring retry req')
 								}
+							})
+						} else {
+							// Processamento normal da mensagem
+							let type: MessageReceiptType = undefined
+							let participant = msg.key.participant
+							if (category === 'peer') {
+								type = 'peer_msg'
+							} else if (msg.key.fromMe) {
+								type = 'sender'
+								if (isJidUser(msg.key.remoteJid!)) {
+									participant = author
+								}
+							} else if (!sendActiveReceipts) {
+								type = 'inactive'
+							}
+
+							await sendReceipt(msg.key.remoteJid!, participant!, [msg.key.id!], type)
+
+							const isAnyHistoryMsg = getHistoryMsg(msg.message!)
+							if (isAnyHistoryMsg) {
+								const jid = jidNormalizedUser(msg.key.remoteJid!)
+								await sendReceipt(jid, undefined, [msg.key.id!], 'hist_sync')
+							}
+						}
+
+						cleanMessage(msg, authState.creds.me!.id)
+						await sendMessageAck(node)
+						await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
+					} catch (decryptError) {
+						console.error({ error: decryptError, messageKey }, 'Decryption failed')
+						// Tratamento específico para SessionError
+						if (decryptError.message.includes('No session') || decryptError.message.includes('Bad MAC')
+						|| decryptError.message.includes('MAC verification') || decryptError.message.includes('No matching sessions')
+						) {
+							console.warn('trying to handle session error in message decryption')
+
+							const pendingDecryption = PENDING_MESSAGE_DECRYPTIONS.get(messageKey)
+
+							if (!pendingDecryption) {
+								// Primeira falha - adiciona à queue
+								PENDING_MESSAGE_DECRYPTIONS.set(messageKey, {
+									node,
+									retryCount: 1,
+									timestamp: Date.now()
+								})
+
+								console.warn({ messageKey, error: decryptError.message }, 'Session not found, scheduling retry')
+
+								// Agenda retry
+								setTimeout(() => {
+									retryMessageDecryption(messageKey).catch(err =>
+										logger.error({ err, messageKey }, 'Error in retry decryption')
+									)
+								}, DECRYPT_RETRY_DELAY)
+
+								// Por enquanto, processa como ciphertext
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = ['Session not ready, retrying...']
+
+								cleanMessage(msg, authState.creds.me!.id)
+								await sendMessageAck(node)
+								await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
+							} else if (pendingDecryption.retryCount < MAX_DECRYPT_RETRY_COUNT) {
+								// Retry subsequente
+								pendingDecryption.retryCount++
+								console.warn({ messageKey, retryCount: pendingDecryption.retryCount }, 'Retrying message decryption')
+
+								setTimeout(() => {
+									retryMessageDecryption(messageKey).catch(err =>
+										console.error({ err, messageKey }, 'Error in retry decryption')
+									)
+								}, DECRYPT_RETRY_DELAY * pendingDecryption.retryCount)
 							} else {
-								logger.debug({ node }, 'connection closed, ignoring retry req')
-							}
-						})
-					} else {
-						// no type in the receipt => message delivered
-						let type: MessageReceiptType = undefined
-						let participant = msg.key.participant
-						if (category === 'peer') {
-							// special peer message
-							type = 'peer_msg'
-						} else if (msg.key.fromMe) {
-							// message was sent by us from a different device
-							type = 'sender'
-							// need to specially handle this case
-							if (isJidUser(msg.key.remoteJid!)) {
-								participant = author
-							}
-						} else if (!sendActiveReceipts) {
-							type = 'inactive'
-						}
+								// Máximo de retries atingido
+								PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
+								console.error({ messageKey }, 'Max retry count reached for message decryption')
 
-						await sendReceipt(msg.key.remoteJid!, participant!, [msg.key.id!], type)
+								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
+								msg.messageStubParameters = ['Decryption failed after retries']
 
-						// send ack for history message
-						const isAnyHistoryMsg = getHistoryMsg(msg.message!)
-						if (isAnyHistoryMsg) {
-							const jid = jidNormalizedUser(msg.key.remoteJid!)
-							await sendReceipt(jid, undefined, [msg.key.id!], 'hist_sync')
+								cleanMessage(msg, authState.creds.me!.id)
+								await sendMessageAck(node)
+								await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
+							}
+						} else {
+							// Outros erros de descriptografia
+							logger.error({ error: decryptError, messageKey }, 'Decryption failed with non-session error')
+							throw decryptError
 						}
 					}
-
-					cleanMessage(msg, authState.creds.me!.id)
-
-					await sendMessageAck(node)
-
-					await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 				})
 			])
 		} catch (error) {
 			logger.error({ error, node }, 'error in handling message')
+			await sendMessageAck(node) // Ainda assim envia ack para evitar loops
 		}
 	}
+
+	const retryMessageDecryption = async (messageKey: string) => {
+		const pendingDecryption = PENDING_MESSAGE_DECRYPTIONS.get(messageKey)
+
+		if (!pendingDecryption) {
+			return
+		}
+
+		const { node } = pendingDecryption
+
+		try {
+			// try to decrypt the message again
+			await handleMessage(node)
+		} catch (error) {
+			logger.error({ error, messageKey }, 'Retry decryption failed')
+
+			if (pendingDecryption.retryCount >= MAX_DECRYPT_RETRY_COUNT) {
+				PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
+			}
+		}
+	}
+
+	setInterval(() => {
+		const now = Date.now()
+		const maxAge = 5 * 60 * 1000 // 5 minutes
+
+		for (const [key, pending] of PENDING_MESSAGE_DECRYPTIONS.entries()) {
+			if (now - pending.timestamp > maxAge) {
+				PENDING_MESSAGE_DECRYPTIONS.delete(key)
+				logger.debug({ key }, 'Removed old pending decryption from queue')
+			}
+		}
+	}, 60000)
 
 	const fetchMessageHistory = async (
 		count: number,
