@@ -325,6 +325,9 @@ export const addTransactionCapability = (
 
 	// Global transaction mutex
 	const transactionMutexes = new Map<string, Mutex>()
+	
+	// Track last usage time for transaction mutexes (in milliseconds)
+	const transactionMutexLastUsed = new Map<string, number>()
 
 	// number of queries made to the DB during the transaction
 	// only there for logging purposes
@@ -358,12 +361,37 @@ export const addTransactionCapability = (
 		}
 	}
 
+	// Cleanup expired transaction mutexes
+	function cleanupExpiredTransactionMutexes(): void {
+		const now = Date.now()
+		const expiredKeys: string[] = []
+
+		for (const [transactionKey, lastUsed] of transactionMutexLastUsed.entries()) {
+			if (now - lastUsed > MUTEX_EXPIRATION_TIME) {
+				expiredKeys.push(transactionKey)
+			}
+		}
+
+		if (expiredKeys.length > 0) {
+			for (const transactionKey of expiredKeys) {
+				transactionMutexes.delete(transactionKey)
+				transactionMutexLastUsed.delete(transactionKey)
+			}
+
+			logger.info({
+				expiredCount: expiredKeys.length,
+				remainingCount: transactionMutexes.size
+			}, 'cleaned up expired transaction mutexes')
+		}
+	}
+
 	// Start periodic cleanup
 	function startCleanupTimer(): void {
 		if (cleanupTimer) return
 
 		cleanupTimer = setInterval(() => {
 			cleanupExpiredSenderKeyMutexes()
+			cleanupExpiredTransactionMutexes()
 		}, CLEANUP_INTERVAL)
 
 		// Ensure cleanup happens on process exit
@@ -375,6 +403,9 @@ export const addTransactionCapability = (
 			})
 		}
 	}
+
+	// Start cleanup timer
+	startCleanupTimer()
 
 	// Get or create a mutex for a specific key type
 	function getKeyTypeMutex(type: string): Mutex {
@@ -399,18 +430,21 @@ export const addTransactionCapability = (
 			senderKeyMutexes.set(senderKeyName, mutex)
 			logger.info({ senderKeyName }, 'created new sender key mutex')
 
-			// Start cleanup timer when first mutex is created
-			startCleanupTimer()
 		}
 
 		return mutex
 	}
 
 	function getTransactionMutex(key: string): Mutex {
+		// Update last used time for transaction mutexes
+		transactionMutexLastUsed.set(key, Date.now())
+		
 		let mutex = transactionMutexes.get(key)
 		if (!mutex) {
 			mutex = new Mutex()
 			transactionMutexes.set(key, mutex)
+			logger.info({ transactionKey: key }, 'created new transaction mutex')
+
 		}
 
 		return mutex
