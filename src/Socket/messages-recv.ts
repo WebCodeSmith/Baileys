@@ -884,7 +884,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 					} catch (decryptError) {
 						// Tratamento específico para SessionError
-						if (decryptError.message.includes('No session record')) {
+						if (decryptError.message.includes('No session')) {
 							logger.warn('trying to handle session error in message decryption')
 
 							const pendingDecryption = PENDING_MESSAGE_DECRYPTIONS.get(messageKey)
