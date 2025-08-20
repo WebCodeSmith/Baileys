@@ -8,6 +8,30 @@ import {SenderKeyName} from './Group/sender-key-name'
 import {SenderKeyRecord} from './Group/sender-key-record'
 import {GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage} from './Group'
 
+// Session recovery configuration
+const SESSION_RECOVERY_CONFIG = {
+	maxRetries: 3,
+	baseDelayMs: 50,
+	sessionRecordErrors: ['No session record', 'SessionError: No session record']
+}
+
+/**
+ * Check if an error is related to missing session record
+ */
+function isSessionRecordError(error: any): boolean {
+	const errorMessage = error?.message || error?.toString() || '';
+	return SESSION_RECOVERY_CONFIG.sessionRecordErrors.some(errorPattern =>
+		errorMessage.includes(errorPattern)
+	);
+}
+
+/**
+ * Sleep utility for retry delays
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository {
 	const storage: SenderKeyStore = signalStorage(auth)
 
@@ -23,6 +47,28 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			key.includes('@g.us.history') ||               // Group history sync
 			key.includes('.whatsapp.net.history');
 
+	}
+
+	/**
+	 * Attempt to recover from session record errors by clearing the session
+	 * and allowing libsignal to rebuild it on the next message
+	 */
+	async function attemptSessionRecovery(jid: string, error: any): Promise<void> {
+		if (!isSessionRecordError(error)) {
+			return;
+		}
+
+		try {
+			const addr = jidToSignalProtocolAddress(jid);
+			const sessionId = addr.toString();
+
+			// Clear the corrupted session to allow recovery
+			await auth.keys.set({session: {[sessionId]: null}});
+
+			console.log(`[Session Recovery] Cleared corrupted session for ${jid}`);
+		} catch (recoveryError) {
+			console.warn(`[Session Recovery] Failed to clear session for ${jid}:`, recoveryError);
+		}
 	}
 
 	return {
@@ -62,14 +108,12 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				await builder.process(senderName, senderMsg)
 			}, item.groupId)
 		},
+
 		async decryptMessage({jid, type, ciphertext}) {
 			const addr = jidToSignalProtocolAddress(jid)
 			const session = new libsignal.SessionCipher(storage, addr)
 
-
-			// Use transaction to ensure atomicity
-
-			async function doDecrypt() {
+			async function doDecrypt(): Promise<Buffer> {
 				let result: Buffer
 				switch (type) {
 					case 'pkmsg':
@@ -79,20 +123,53 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 						result = await session.decryptWhisperMessage(ciphertext)
 						break
 				}
-
 				return result
 			}
 
+			// Enhanced decryption with session recovery for regular messages
+			async function decryptWithRecovery(): Promise<Buffer> {
+				let lastError: any;
+
+				for (let attempt = 0; attempt <= SESSION_RECOVERY_CONFIG.maxRetries; attempt++) {
+					try {
+						return await doDecrypt();
+					} catch (error) {
+						lastError = error;
+
+						// Only attempt recovery for session record errors
+						if (!isSessionRecordError(error)) {
+							throw error;
+						}
+
+						// Don't retry on the last attempt
+						if (attempt === SESSION_RECOVERY_CONFIG.maxRetries) {
+							break;
+						}
+
+						console.warn(`[libsignal] Session record error for ${jid}, attempt ${attempt + 1}/${SESSION_RECOVERY_CONFIG.maxRetries + 1}: ${error.message}`);
+
+						// Attempt session recovery
+						await attemptSessionRecovery(jid, error);
+
+						// Wait before retry with exponential backoff
+						const delay = SESSION_RECOVERY_CONFIG.baseDelayMs * Math.pow(2, attempt);
+						await sleep(delay);
+					}
+				}
+
+				// If all retries failed, throw the last error
+				throw lastError;
+			}
+
 			if (isLikelySyncMessage(addr)) {
-				// If it's a sync message, we can skip the transaction
+				// If it's a sync message, we can skip the transaction and recovery
 				// as it is likely to be a system message that doesn't require strict atomicity
 				return await doDecrypt()
 			}
 
-			// If it's not a sync message, we need to ensure atomicity
-			// For regular messages, we use a transaction to ensure atomicity
+			// For regular messages, use transaction and recovery mechanism
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				return await doDecrypt()
+				return await decryptWithRecovery()
 			}, jid)
 		},
 		async encryptMessage({jid, data}) {
