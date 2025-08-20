@@ -18,7 +18,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			// Use transaction to ensure atomicity
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
 				return cipher.decrypt(msg)
-			})
+			}, group)
 		},
 
 		async processSenderKeyDistributionMessage({ item, authorJid }) {
@@ -45,7 +45,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				}
 
 				await builder.process(senderName, senderMsg)
-			})
+			}, item.groupId)
 		},
 		async decryptMessage({ jid, type, ciphertext }) {
 			const addr = jidToSignalProtocolAddress(jid)
@@ -64,7 +64,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				}
 
 				return result
-			})
+			}, jid)
 		},
 		async encryptMessage({ jid, data }) {
 			const addr = jidToSignalProtocolAddress(jid)
@@ -75,7 +75,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				const { type: sigType, body } = await cipher.encrypt(data)
 				const type = sigType === 3 ? 'pkmsg' : 'msg'
 				return { type, ciphertext: Buffer.from(body, 'binary') }
-			})
+			}, jid)
 		},
 		async encryptGroupMessage({ group, meId, data }) {
 			const senderName = jidToSignalSenderKeyName(group, meId)
@@ -98,7 +98,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 					ciphertext,
 					senderKeyDistributionMessage: senderKeyDistributionMessage.serialize()
 				}
-			})
+			}, group)
 		},
 		async injectE2ESession({ jid, session }) {
 			const cipher = new libsignal.SessionBuilder(storage, jidToSignalProtocolAddress(jid))
@@ -106,7 +106,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			// Use transaction to ensure atomicity
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
 				await cipher.initOutgoing(session)
-			})
+			}, jid)
 		},
 		jidToSignalProtocolAddress(jid) {
 			return jidToSignalProtocolAddress(jid).toString()

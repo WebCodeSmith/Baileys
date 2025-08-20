@@ -324,7 +324,7 @@ export const addTransactionCapability = (
 	let cleanupTimer: NodeJS.Timeout | null = null
 
 	// Global transaction mutex
-	const transactionMutex = new Mutex()
+	const transactionMutexes = new Map<string, Mutex>()
 
 	// number of queries made to the DB during the transaction
 	// only there for logging purposes
@@ -401,6 +401,16 @@ export const addTransactionCapability = (
 
 			// Start cleanup timer when first mutex is created
 			startCleanupTimer()
+		}
+
+		return mutex
+	}
+
+	function getTransactionMutex(key: string): Mutex {
+		let mutex = transactionMutexes.get(key)
+		if (!mutex) {
+			mutex = new Mutex()
+			transactionMutexes.set(key, mutex)
 		}
 
 		return mutex
@@ -551,8 +561,8 @@ export const addTransactionCapability = (
 		},
 		isInTransaction,
 		...(state.clear ? { clear: state.clear } : {}),
-		async transaction(work) {
-			return transactionMutex.acquire().then(async releaseTxMutex => {
+		async transaction(work, key) {
+			return getTransactionMutex(key).acquire().then(async releaseTxMutex => {
 				let result: Awaited<ReturnType<typeof work>>
 				try {
 					transactionsInProgress += 1
