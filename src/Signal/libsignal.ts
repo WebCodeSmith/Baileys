@@ -1,17 +1,32 @@
 import * as libsignal from 'libsignal'
-import { SignalAuthState, SignalKeyStoreWithTransaction } from '../Types'
-import { SignalRepository } from '../Types/Signal'
-import { generateSignalPubKey } from '../Utils'
-import { jidDecode } from '../WABinary'
-import type { SenderKeyStore } from './Group/group_cipher'
-import { SenderKeyName } from './Group/sender-key-name'
-import { SenderKeyRecord } from './Group/sender-key-record'
-import { GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage } from './Group'
+import {SignalAuthState, SignalKeyStoreWithTransaction} from '../Types'
+import {SignalRepository} from '../Types/Signal'
+import {generateSignalPubKey} from '../Utils'
+import {jidDecode} from '../WABinary'
+import type {SenderKeyStore} from './Group/group_cipher'
+import {SenderKeyName} from './Group/sender-key-name'
+import {SenderKeyRecord} from './Group/sender-key-record'
+import {GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage} from './Group'
 
 export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository {
 	const storage: SenderKeyStore = signalStorage(auth)
+
+	function isLikelySyncMessage(addr): boolean {
+		const key = addr.toString();
+
+		// Only bypass for WhatsApp system addresses, not regular user contacts
+		// Be very specific about sync service patterns
+		return key.includes('@lid.whatsapp.net') ||           // WhatsApp system messages
+			key.includes('@broadcast') ||                   // Broadcast messages
+			key.includes('@newsletter') ||                  // Newsletter messages
+			key === 'status@broadcast' ||                   // Status updates
+			key.includes('@g.us.history') ||               // Group history sync
+			key.includes('.whatsapp.net.history');
+
+	}
+
 	return {
-		decryptGroupMessage({ group, authorJid, msg }) {
+		decryptGroupMessage({group, authorJid, msg}) {
 			const senderName = jidToSignalSenderKeyName(group, authorJid)
 			const cipher = new GroupCipher(storage, senderName)
 
@@ -21,7 +36,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			}, group)
 		},
 
-		async processSenderKeyDistributionMessage({ item, authorJid }) {
+		async processSenderKeyDistributionMessage({item, authorJid}) {
 			const builder = new GroupSessionBuilder(storage)
 			if (!item.groupId) {
 				throw new Error('Group ID is required for sender key distribution message')
@@ -39,7 +54,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			const senderNameStr = senderName.toString()
 
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
+				const {[senderNameStr]: senderKey} = await auth.keys.get('sender-key', [senderNameStr])
 				if (!senderKey) {
 					await storage.storeSenderKey(senderName, new SenderKeyRecord())
 				}
@@ -47,12 +62,14 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				await builder.process(senderName, senderMsg)
 			}, item.groupId)
 		},
-		async decryptMessage({ jid, type, ciphertext }) {
+		async decryptMessage({jid, type, ciphertext}) {
 			const addr = jidToSignalProtocolAddress(jid)
 			const session = new libsignal.SessionCipher(storage, addr)
 
-			// Use transaction to ensure atomicityAdd commentMore actions
-			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
+
+			// Use transaction to ensure atomicity
+
+			async function doDecrypt() {
 				let result: Buffer
 				switch (type) {
 					case 'pkmsg':
@@ -64,20 +81,32 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				}
 
 				return result
+			}
+
+			if (isLikelySyncMessage(addr)) {
+				// If it's a sync message, we can skip the transaction
+				// as it is likely to be a system message that doesn't require strict atomicity
+				return await doDecrypt()
+			}
+
+			// If it's not a sync message, we need to ensure atomicity
+			// For regular messages, we use a transaction to ensure atomicity
+			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
+				return await doDecrypt()
 			}, jid)
 		},
-		async encryptMessage({ jid, data }) {
+		async encryptMessage({jid, data}) {
 			const addr = jidToSignalProtocolAddress(jid)
 			const cipher = new libsignal.SessionCipher(storage, addr)
 
 			// Use transaction to ensure atomicityAdd commentMore actions
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				const { type: sigType, body } = await cipher.encrypt(data)
+				const {type: sigType, body} = await cipher.encrypt(data)
 				const type = sigType === 3 ? 'pkmsg' : 'msg'
-				return { type, ciphertext: Buffer.from(body, 'binary') }
+				return {type, ciphertext: Buffer.from(body, 'binary')}
 			}, jid)
 		},
-		async encryptGroupMessage({ group, meId, data }) {
+		async encryptGroupMessage({group, meId, data}) {
 			const senderName = jidToSignalSenderKeyName(group, meId)
 			const builder = new GroupSessionBuilder(storage)
 
@@ -85,7 +114,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 
 			// Use transaction to ensure atomicity
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
+				const {[senderNameStr]: senderKey} = await auth.keys.get('sender-key', [senderNameStr])
 				if (!senderKey) {
 					await storage.storeSenderKey(senderName, new SenderKeyRecord())
 				}
@@ -100,7 +129,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				}
 			}, group)
 		},
-		async injectE2ESession({ jid, session }) {
+		async injectE2ESession({jid, session}) {
 			const cipher = new libsignal.SessionBuilder(storage, jidToSignalProtocolAddress(jid))
 
 			// Use transaction to ensure atomicity
@@ -115,7 +144,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 }
 
 const jidToSignalProtocolAddress = (jid: string) => {
-	const { user, device } = jidDecode(jid)!
+	const {user, device} = jidDecode(jid)!
 	return new libsignal.ProtocolAddress(user, device || 0)
 }
 
@@ -123,23 +152,23 @@ const jidToSignalSenderKeyName = (group: string, user: string): SenderKeyName =>
 	return new SenderKeyName(group, jidToSignalProtocolAddress(user))
 }
 
-function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Record<string, any> {
+function signalStorage({creds, keys}: SignalAuthState): SenderKeyStore & Record<string, any> {
 	return {
 		loadSession: async (id: string) => {
-			const { [id]: sess } = await keys.get('session', [id])
+			const {[id]: sess} = await keys.get('session', [id])
 			if (sess) {
 				return libsignal.SessionRecord.deserialize(sess)
 			}
 		},
 		storeSession: async (id: string, session: libsignal.SessionRecord) => {
-			await keys.set({ session: { [id]: session.serialize() } })
+			await keys.set({session: {[id]: session.serialize()}})
 		},
 		isTrustedIdentity: () => {
 			return true
 		},
 		loadPreKey: async (id: number | string) => {
 			const keyId = id.toString()
-			const { [keyId]: key } = await keys.get('pre-key', [keyId])
+			const {[keyId]: key} = await keys.get('pre-key', [keyId])
 			if (key) {
 				return {
 					privKey: Buffer.from(key.private),
@@ -147,7 +176,7 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 				}
 			}
 		},
-		removePreKey: (id: number) => keys.set({ 'pre-key': { [id]: null } }),
+		removePreKey: (id: number) => keys.set({'pre-key': {[id]: null}}),
 		loadSignedPreKey: () => {
 			const key = creds.signedPreKey
 			return {
@@ -157,7 +186,7 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 		},
 		loadSenderKey: async (senderKeyName: SenderKeyName) => {
 			const keyId = senderKeyName.toString()
-			const { [keyId]: key } = await keys.get('sender-key', [keyId])
+			const {[keyId]: key} = await keys.get('sender-key', [keyId])
 			if (key) {
 				return SenderKeyRecord.deserialize(key)
 			}
@@ -167,11 +196,11 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 		storeSenderKey: async (senderKeyName: SenderKeyName, key: SenderKeyRecord) => {
 			const keyId = senderKeyName.toString()
 			const serialized = JSON.stringify(key.serialize())
-			await keys.set({ 'sender-key': { [keyId]: Buffer.from(serialized, 'utf-8') } })
+			await keys.set({'sender-key': {[keyId]: Buffer.from(serialized, 'utf-8')}})
 		},
 		getOurRegistrationId: () => creds.registrationId,
 		getOurIdentity: () => {
-			const { signedIdentityKey } = creds
+			const {signedIdentityKey} = creds
 			return {
 				privKey: Buffer.from(signedIdentityKey.private),
 				pubKey: generateSignalPubKey(signedIdentityKey.public)
