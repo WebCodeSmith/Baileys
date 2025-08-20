@@ -143,7 +143,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 
 						// Don't retry on the last attempt
 						if (attempt === SESSION_RECOVERY_CONFIG.maxRetries) {
-							break;
+							throw error;
 						}
 
 						console.warn(`[libsignal] Session record error for ${jid}, attempt ${attempt + 1}/${SESSION_RECOVERY_CONFIG.maxRetries + 1}: ${error.message}`);
