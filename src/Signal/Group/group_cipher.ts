@@ -49,21 +49,27 @@ export class GroupCipher {
 	public async decrypt(senderKeyMessageBytes: Uint8Array): Promise<Uint8Array> {
 		const record = await this.senderKeyStore.loadSenderKey(this.senderKeyName)
 		if (!record) {
-			throw new Error('No SenderKeyRecord found for decryption')
+			throw new Error(`No SenderKeyRecord found for decryption: ${this.senderKeyName.toString()}`)
 		}
 
 		const senderKeyMessage = new SenderKeyMessage(null, null, null, null, senderKeyMessageBytes)
-		let senderKeyState = record.getSenderKeyState(senderKeyMessage.getKeyId())
+		const messageKeyId = senderKeyMessage.getKeyId()
+		let senderKeyState = record.getSenderKeyState(messageKeyId)
 
 		// Fallback: try to get the latest sender key state if specific keyId not found
 		if (!senderKeyState) {
 			senderKeyState = record.getSenderKeyState()
 			if (!senderKeyState) {
-				throw new Error('No session found to decrypt message')
+				throw new Error(`No session found to decrypt message for ${this.senderKeyName.toString()}, keyId: ${messageKeyId}`)
 			}
 		}
 
-		senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic())
+		try {
+			senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic())
+		} catch (error) {
+			throw new Error(`Signature verification failed for ${this.senderKeyName.toString()}: ${error.message}`)
+		}
+
 		const senderKey = this.getSenderKey(senderKeyState, senderKeyMessage.getIteration())
 
 		const plaintext = await this.getPlainText(
@@ -108,7 +114,9 @@ export class GroupCipher {
 		try {
 			return decrypt(key, ciphertext, iv)
 		} catch (e) {
-			throw new Error('InvalidMessageException')
+			// Preserve the original error message for better debugging
+			const errorMessage = e?.message || 'InvalidMessageException'
+			throw new Error(`Decryption failed for ${this.senderKeyName.toString()}: ${errorMessage}`)
 		}
 	}
 

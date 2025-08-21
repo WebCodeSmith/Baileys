@@ -185,11 +185,16 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 		},
 		loadSenderKey: async (senderKeyName: SenderKeyName) => {
 			const keyId = senderKeyName.toString()
-			const { [keyId]: key } = await keys.get('sender-key', [keyId])
-			if (key) {
-				return SenderKeyRecord.deserialize(key)
+			try {
+				const { [keyId]: key } = await keys.get('sender-key', [keyId])
+				if (key) {
+					return SenderKeyRecord.deserialize(key)
+				}
+			} catch (error) {
+				console.warn(`Failed to load sender key for ${keyId}:`, error.message)
 			}
 
+			// Return empty record if key not found or failed to load
 			return new SenderKeyRecord()
 		},
 		storeSenderKey: async (senderKeyName: SenderKeyName, key: SenderKeyRecord) => {
