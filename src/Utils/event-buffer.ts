@@ -113,6 +113,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			logger.debug('Event buffer activated')
 			isBuffering = true
 		}
+
 		buffersInProgress += 1
 		logger.trace({ buffersInProgress }, 'buffer started')
 		scheduleForceFlush()
@@ -231,6 +232,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 						logger.warn({ error: error.message }, 'releasing buffer due to error in buffered function')
 						flush()
 					}
+
 					throw error
 				} finally {
 					// Flushing is now controlled centrally by the state machine.

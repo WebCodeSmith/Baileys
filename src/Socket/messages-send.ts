@@ -21,15 +21,14 @@ import {
 	encodeWAMessage,
 	encryptMediaRetryRequest,
 	extractDeviceJids,
+	fetchPreKeys,
 	generateMessageIDV2,
 	generateWAMessage,
 	getStatusCodeForMediaRetry,
 	getUrlFromDirectPath,
 	getWAUploadToServer,
 	normalizeMessageContent,
-	parseAndInjectE2ESessions,
-	unixTimestampSeconds,
-	fetchPreKeys
+	unixTimestampSeconds
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
 import {

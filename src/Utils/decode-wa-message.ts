@@ -169,6 +169,7 @@ export function getMessageRetryState(messageKey: string): MessageRetryState {
 			sessionRecreateHistory: new Map()
 		})
 	}
+
 	return messageRetryStates.get(messageKey)!
 }
 
@@ -541,6 +542,68 @@ function sleep(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// Helper functions for session recreation
+async function handleSessionRecreation(
+	senderJid: string,
+	currentRetryCount: number,
+	sessionContext: SessionRecreationContext | undefined,
+	messageKey: WAMessageKey,
+	logger: any
+): Promise<{ reason: string; recreate: boolean; shouldFetchPreKeys: boolean }> {
+	try {
+		const sessionResult = await shouldRecreateSession(senderJid, currentRetryCount, sessionContext)
+
+		if (sessionResult.recreate) {
+			logger.warn(
+				{
+					key: messageKey,
+					reason: sessionResult.reason,
+					shouldFetchPreKeys: sessionResult.shouldFetchPreKeys
+				},
+				'Session recreation recommended'
+			)
+
+			// Execute session recreation with prekey fetching
+			if (sessionResult.shouldFetchPreKeys && sessionContext) {
+				await executeSessionRecreationWithPrekeys(senderJid, sessionContext, logger)
+			}
+		}
+
+		return sessionResult
+	} catch (sessionCheckError: any) {
+		logger.warn(
+			{
+				jid: senderJid,
+				error: sessionCheckError.message
+			},
+			'Failed to check session recreation need'
+		)
+		return { recreate: false, shouldFetchPreKeys: false, reason: '' }
+	}
+}
+
+async function executeSessionRecreationWithPrekeys(
+	senderJid: string,
+	sessionContext: SessionRecreationContext,
+	logger: any
+): Promise<void> {
+	try {
+		const success = await executeSessionRecreation(senderJid, sessionContext)
+		logger.debug(
+			{ jid: senderJid },
+			success ? 'Session recreation completed successfully' : 'Session recreation failed'
+		)
+	} catch (prekeyError: any) {
+		logger.warn(
+			{
+				jid: senderJid,
+				error: prekeyError.message
+			},
+			'Failed to execute session recreation'
+		)
+	}
+}
+
 /**
  * Decrypt a single message with retry logic for recoverable errors (inspired by whatsmeow)
  */
@@ -569,6 +632,7 @@ async function decryptWithRetry(
 			if (messageRetryStates.has(messageKeyStr)) {
 				messageRetryStates.delete(messageKeyStr)
 			}
+
 			return result
 		} catch (error: any) {
 			lastError = error
@@ -609,55 +673,16 @@ async function decryptWithRetry(
 
 			// Check if we should recreate session (whatsmeow-inspired logic)
 			const senderJid = messageKey.participant || messageKey.remoteJid || ''
-			let recreate = false
-			let shouldFetchPreKeys = false
-			let recreateReason = ''
 
-			try {
-				const sessionResult = await shouldRecreateSession(senderJid, currentRetryCount, sessionContext)
-				recreate = sessionResult.recreate
-				shouldFetchPreKeys = sessionResult.shouldFetchPreKeys
-				recreateReason = sessionResult.reason
-
-				if (recreate) {
-					logger.warn(
-						{
-							key: messageKey,
-							reason: recreateReason,
-							shouldFetchPreKeys
-						},
-						'Session recreation recommended'
-					)
-
-					// Execute session recreation with prekey fetching
-					if (shouldFetchPreKeys && sessionContext) {
-						try {
-							const success = await executeSessionRecreation(senderJid, sessionContext)
-							if (success) {
-								logger.debug({ jid: senderJid }, 'Session recreation completed successfully')
-							} else {
-								logger.warn({ jid: senderJid }, 'Session recreation failed')
-							}
-						} catch (prekeyError: any) {
-							logger.warn(
-								{
-									jid: senderJid,
-									error: prekeyError.message
-								},
-								'Failed to execute session recreation'
-							)
-						}
-					}
-				}
-			} catch (sessionCheckError: any) {
-				logger.warn(
-					{
-						jid: senderJid,
-						error: sessionCheckError.message
-					},
-					'Failed to check session recreation need'
-				)
-			}
+			const sessionResult = await handleSessionRecreation(
+				senderJid,
+				currentRetryCount,
+				sessionContext,
+				messageKey,
+				logger
+			)
+			const recreate = sessionResult.recreate
+			const recreateReason = sessionResult.reason
 
 			// Send retry request immediately when we detect a decryption error
 			// This is more efficient than waiting for the full message processing
