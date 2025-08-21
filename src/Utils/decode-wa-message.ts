@@ -314,9 +314,7 @@ async function decryptWithRetry(
 	decryptFn: () => Promise<Uint8Array>,
 	logger: ILogger,
 	messageKey: WAMessageKey,
-	messageType: string,
-	node?: BinaryNode,
-	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
+	messageType: string
 ): Promise<Uint8Array> {
 	let lastError: any
 
@@ -328,11 +326,13 @@ async function decryptWithRetry(
 
 			// Only retry for recoverable errors (session record, MAC, etc.)
 			if (!isRecoverableDecryptionError(error)) {
+				console.error('Non-recoverable decryption error:', error)
 				throw error
 			}
 
 			// Don't retry on the last attempt
 			if (attempt === DECRYPTION_RETRY_CONFIG.maxRetries) {
+				console.warn('Max retries reached, throwing last error:', lastError)
 				break
 			}
 
@@ -354,26 +354,6 @@ async function decryptWithRetry(
 				},
 				`${errorType} error detected, retrying decryption`
 			)
-
-			// Send retry request immediately when we detect a decryption error
-			// This is more efficient than waiting for the full message processing
-			if (node && sendRetryRequestFn && attempt <= 1) {
-				try {
-					// Force include keys on first retry to help with session recovery
-					const forceIncludeKeys = isSessionRecordError(error) || isMacError(error)
-					await sendRetryRequestFn(node, forceIncludeKeys)
-					logger.debug({
-						key: messageKey,
-						errorType,
-						forceIncludeKeys
-					}, 'sent retry request during decryption retry')
-				} catch (retryRequestError) {
-					logger.warn({
-						key: messageKey,
-						error: retryRequestError.message
-					}, 'failed to send retry request during decryption retry')
-				}
-			}
 
 			await sleep(delay)
 		}

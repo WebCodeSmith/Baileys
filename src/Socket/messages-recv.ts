@@ -848,6 +848,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 									}
 
 									const encNode = getBinaryNodeChild(node, 'enc')
+
+									console.warn({ messageKey, node }, 'Message decryption failed, sending retry request')
+									
 									await sendRetryRequest(node, !encNode)
 									if (retryRequestDelayMs) {
 										await delay(retryRequestDelayMs)
