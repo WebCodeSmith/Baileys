@@ -20,9 +20,19 @@ export const MISSING_KEYS_ERROR_TEXT = 'Key used already or never filled'
 
 // Retry configuration for failed decryption
 export const DECRYPTION_RETRY_CONFIG = {
-	maxRetries: 3,
+	maxRetries: 5,
 	baseDelayMs: 100,
-	sessionRecordErrors: ['No session record', 'SessionError: No session record']
+	sessionRecordErrors: ['No session record', 'SessionError: No session record', 'No matching sessions', 'No session found'],
+	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
+	allRecoverableErrors: [
+		'No session record',
+		'SessionError: No session record',
+		'No session found',
+		'Bad MAC',
+		'MAC verification failed',
+		'Bad MAC Error',
+		'No matching sessions found for message'
+	]
 }
 
 export const NACK_REASONS = {
@@ -260,6 +270,26 @@ export const decryptMessageNode = (
 }
 
 /**
+ * Utility function to check if an error is recoverable (session record or MAC errors)
+ */
+function isRecoverableDecryptionError(error: any): boolean {
+	const errorMessage = error?.message || error?.toString() || '';
+	return DECRYPTION_RETRY_CONFIG.allRecoverableErrors.some(errorPattern =>
+		errorMessage.includes(errorPattern)
+	);
+}
+
+/**
+ * Utility function to check if an error is specifically a MAC error
+ */
+function isMacError(error: any): boolean {
+	const errorMessage = error?.message || error?.toString() || '';
+	return DECRYPTION_RETRY_CONFIG.macErrors.some(errorPattern =>
+		errorMessage.includes(errorPattern)
+	);
+}
+
+/**
  * Utility function to check if an error is related to missing session record
  */
 function isSessionRecordError(error: any): boolean {
@@ -277,7 +307,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Decrypt a single message with retry logic for session record errors
+ * Decrypt a single message with retry logic for recoverable errors
  */
 async function decryptWithRetry(
 	decryptFn: () => Promise<Uint8Array>,
@@ -293,8 +323,8 @@ async function decryptWithRetry(
 		} catch (error) {
 			lastError = error;
 
-			// Only retry for session record errors
-			if (!isSessionRecordError(error)) {
+			// Only retry for recoverable errors (session record, MAC, etc.)
+			if (!isRecoverableDecryptionError(error)) {
 				throw error;
 			}
 
@@ -306,14 +336,20 @@ async function decryptWithRetry(
 			// Calculate delay with exponential backoff
 			const delay = DECRYPTION_RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt);
 
+			// Enhanced logging with error type classification
+			const errorType = isMacError(error) ? 'MAC' :
+							 isSessionRecordError(error) ? 'Session Record' :
+							 'Other Recoverable';
+
 			logger.warn({
 				key: messageKey,
 				attempt: attempt + 1,
 				maxRetries: DECRYPTION_RETRY_CONFIG.maxRetries + 1,
 				error: error.message,
+				errorType,
 				messageType,
 				delayMs: delay
-			}, 'Session record error detected, retrying decryption');
+			}, `${errorType} error detected, retrying decryption`);
 
 			await sleep(delay);
 		}

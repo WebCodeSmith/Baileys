@@ -10,9 +10,39 @@ import {GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage} from './
 
 // Session recovery configuration
 const SESSION_RECOVERY_CONFIG = {
-	maxRetries: 3,
+	maxRetries: 4,
 	baseDelayMs: 50,
-	sessionRecordErrors: ['No session record', 'SessionError: No session record']
+	sessionRecordErrors: ['No session record', 'SessionError: No session record', 'No matching sessions', 'No session found'],
+	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
+	allRecoverableErrors: [
+		'No session record',
+		'SessionError: No session record',
+		'No session found',
+		'Bad MAC',
+		'MAC verification failed',
+		'Bad MAC Error',
+		'No matching sessions found for message'
+	]
+}
+
+/**
+ * Check if an error is recoverable (session record, MAC, or other signal errors)
+ */
+function isRecoverableSignalError(error: any): boolean {
+	const errorMessage = error?.message || error?.toString() || '';
+	return SESSION_RECOVERY_CONFIG.allRecoverableErrors.some(errorPattern =>
+		errorMessage.includes(errorPattern)
+	);
+}
+
+/**
+ * Check if an error is specifically a MAC error
+ */
+function isMacError(error: any): boolean {
+	const errorMessage = error?.message || error?.toString() || '';
+	return SESSION_RECOVERY_CONFIG.macErrors.some(errorPattern =>
+		errorMessage.includes(errorPattern)
+	);
 }
 
 /**
@@ -71,6 +101,34 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 		}
 	}
 
+	/**
+	 * Attempt to recover from various Signal errors including MAC errors
+	 * For MAC errors, we clear the session to force re-establishment
+	 * For session record errors, we also clear the session
+	 */
+	async function attemptSignalRecovery(jid: string, error: any): Promise<void> {
+		if (!isRecoverableSignalError(error)) {
+			return;
+		}
+
+		try {
+			const addr = jidToSignalProtocolAddress(jid);
+			const sessionId = addr.toString();
+
+			if (isMacError(error)) {
+				// For MAC errors, clear the session and force re-establishment
+				await auth.keys.set({session: {[sessionId]: null}});
+				console.log(`[MAC Recovery] Cleared session with MAC error for ${jid}`);
+			} else if (isSessionRecordError(error)) {
+				// For session record errors, clear the corrupted session
+				await auth.keys.set({session: {[sessionId]: null}});
+				console.log(`[Session Recovery] Cleared corrupted session for ${jid}`);
+			}
+		} catch (recoveryError) {
+			console.warn(`[Signal Recovery] Failed to clear session for ${jid}:`, recoveryError);
+		}
+	}
+
 	return {
 		decryptGroupMessage({group, authorJid, msg}) {
 			const senderName = jidToSignalSenderKeyName(group, authorJid)
@@ -126,7 +184,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				return result
 			}
 
-			// Enhanced decryption with session recovery for regular messages
+			// Enhanced decryption with comprehensive error recovery
 			async function decryptWithRecovery(): Promise<Buffer> {
 				let lastError: any;
 
@@ -136,20 +194,25 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 					} catch (error) {
 						lastError = error;
 
-						// Only attempt recovery for session record errors
-						if (!isSessionRecordError(error)) {
+						// Only attempt recovery for recoverable Signal errors
+						if (!isRecoverableSignalError(error)) {
 							throw error;
 						}
 
 						// Don't retry on the last attempt
 						if (attempt === SESSION_RECOVERY_CONFIG.maxRetries) {
-							throw error;
+							break;
 						}
 
-						console.warn(`[libsignal] Session record error for ${jid}, attempt ${attempt + 1}/${SESSION_RECOVERY_CONFIG.maxRetries + 1}: ${error.message}`);
+						// Enhanced logging with error type classification
+						const errorType = isMacError(error) ? 'MAC' :
+										 isSessionRecordError(error) ? 'Session Record' :
+										 'Other Signal';
 
-						// Attempt session recovery
-						await attemptSessionRecovery(jid, error);
+						console.warn(`[libsignal] ${errorType} error for ${jid}, attempt ${attempt + 1}/${SESSION_RECOVERY_CONFIG.maxRetries + 1}: ${error.message}`);
+
+						// Attempt recovery based on error type
+						await attemptSignalRecovery(jid, error);
 
 						// Wait before retry with exponential backoff
 						const delay = SESSION_RECOVERY_CONFIG.baseDelayMs * Math.pow(2, attempt);
