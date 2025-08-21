@@ -27,9 +27,11 @@ export const DECRYPTION_RETRY_CONFIG = {
 		'SessionError',
 		'Session Record error',
 		'No matching sessions',
-		'No session found'
+		'No session found',
+		'No SenderKeyRecord found',
+		'Signature verification failed'
 	],
-	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
+	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error', 'Decryption failed'],
 	allRecoverableErrors: [
 		'No session record',
 		'SessionError',
@@ -38,7 +40,10 @@ export const DECRYPTION_RETRY_CONFIG = {
 		'Bad MAC',
 		'MAC verification failed',
 		'Bad MAC Error',
-		'No matching sessions found for message'
+		'No matching sessions found for message',
+		'No SenderKeyRecord found',
+		'Signature verification failed',
+		'Decryption failed'
 	]
 }
 
@@ -165,7 +170,8 @@ export const decryptMessageNode = (
 	meId: string,
 	meLid: string,
 	repository: SignalRepository,
-	logger: ILogger
+	logger: ILogger,
+	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
 ) => {
 	const { fullMessage, author, sender } = decodeMessageNode(stanza, meId, meLid)
 	return {
@@ -222,7 +228,9 @@ export const decryptMessageNode = (
 								},
 								logger,
 								fullMessage.key,
-								e2eType
+								e2eType,
+								stanza,
+								sendRetryRequestFn
 							)
 						} else {
 							msgBuffer = content
@@ -314,7 +322,9 @@ async function decryptWithRetry(
 	decryptFn: () => Promise<Uint8Array>,
 	logger: ILogger,
 	messageKey: WAMessageKey,
-	messageType: string
+	messageType: string,
+	node?: BinaryNode,
+	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
 ): Promise<Uint8Array> {
 	let lastError: any
 
@@ -354,6 +364,27 @@ async function decryptWithRetry(
 				},
 				`${errorType} error detected, retrying decryption`
 			)
+
+			// Send retry request immediately when we detect a decryption error
+			// This is more efficient than waiting for the full message processing
+			if (node && sendRetryRequestFn && attempt <= 2) {
+				try {
+					// Force include keys on first retry to help with session recovery
+					const forceIncludeKeys = isSessionRecordError(error) || isMacError(error)
+					await sendRetryRequestFn(node, forceIncludeKeys)
+					logger.debug({
+						key: messageKey,
+						errorType,
+						forceIncludeKeys,
+						attempt: attempt + 1
+					}, 'sent retry request during decryption retry')
+				} catch (retryRequestError) {
+					logger.warn({
+						key: messageKey,
+						error: retryRequestError.message
+					}, 'failed to send retry request during decryption retry')
+				}
+			}
 
 			await sleep(delay)
 		}
