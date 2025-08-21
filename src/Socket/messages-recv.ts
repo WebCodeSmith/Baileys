@@ -885,7 +885,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 					} catch (decryptError) {
 						// Tratamento específico para SessionError
-						if (decryptError.message.includes('No session')) {
+						if (decryptError.message.includes('No session') || decryptError.message.includes('Bad MAC')
+						|| decryptError.message.includes('MAC verification') || decryptError.message.includes('No matching sessions')
+						) {
 							logger.warn('trying to handle session error in message decryption')
 
 							const pendingDecryption = PENDING_MESSAGE_DECRYPTIONS.get(messageKey)
