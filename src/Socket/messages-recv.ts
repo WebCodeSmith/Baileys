@@ -22,7 +22,7 @@ import {
 	Curve,
 	decodeMediaRetryNode,
 	decodeMessageNode,
-	decryptMessageNode,
+	decryptMessageNode, decryptMessageNodeWithRetryRequest,
 	delay,
 	derivePairingCodeKey,
 	encodeBigEndian,
@@ -811,7 +811,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				category,
 				author,
 				decrypt
-			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger)
+			} = decryptMessageNodeWithRetryRequest(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger,
+				sendRetryRequest)
 
 			if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
 				msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
