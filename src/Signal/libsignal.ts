@@ -8,59 +8,6 @@ import { SenderKeyName } from './Group/sender-key-name'
 import { SenderKeyRecord } from './Group/sender-key-record'
 import { GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage } from './Group'
 
-// Session recovery configuration
-const SESSION_RECOVERY_CONFIG = {
-	maxRetries: 4,
-	baseDelayMs: 50,
-	sessionRecordErrors: [
-		'No session record',
-		'SessionError: No session record',
-		'No matching sessions',
-		'No session found'
-	],
-	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
-	allRecoverableErrors: [
-		'No session record',
-		'SessionError: No session record',
-		'No session found',
-		'Bad MAC',
-		'MAC verification failed',
-		'Bad MAC Error',
-		'No matching sessions found for message'
-	]
-}
-
-/**
- * Check if an error is recoverable (session record, MAC, or other signal errors)
- */
-function isRecoverableSignalError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || ''
-	return SESSION_RECOVERY_CONFIG.allRecoverableErrors.some(errorPattern => errorMessage.includes(errorPattern))
-}
-
-/**
- * Check if an error is specifically a MAC error
- */
-function isMacError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || ''
-	return SESSION_RECOVERY_CONFIG.macErrors.some(errorPattern => errorMessage.includes(errorPattern))
-}
-
-/**
- * Check if an error is related to missing session record
- */
-function isSessionRecordError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || ''
-	return SESSION_RECOVERY_CONFIG.sessionRecordErrors.some(errorPattern => errorMessage.includes(errorPattern))
-}
-
-/**
- * Sleep utility for retry delays
- */
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms))
-}
-
 export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository {
 	const storage: SenderKeyStore = signalStorage(auth)
 
@@ -77,34 +24,6 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 			key.includes('@g.us.history') || // Group history sync
 			key.includes('.whatsapp.net.history')
 		)
-	}
-
-	/**
-	 * Attempt to recover from various Signal errors including MAC errors
-	 * For MAC errors, we clear the session to force re-establishment
-	 * For session record errors, we also clear the session
-	 */
-	async function attemptSignalRecovery(jid: string, error: any): Promise<void> {
-		if (!isRecoverableSignalError(error)) {
-			return
-		}
-
-		try {
-			const addr = jidToSignalProtocolAddress(jid)
-			const sessionId = addr.toString()
-
-			if (isMacError(error)) {
-				// For MAC errors, clear the session and force re-establishment
-				await auth.keys.set({ session: { [sessionId]: null } })
-				console.log(`[MAC Recovery] Cleared session with MAC error for ${jid}`)
-			} else if (isSessionRecordError(error)) {
-				// For session record errors, clear the corrupted session
-				await auth.keys.set({ session: { [sessionId]: null } })
-				console.log(`[Session Recovery] Cleared corrupted session for ${jid}`)
-			}
-		} catch (recoveryError) {
-			console.warn(`[Signal Recovery] Failed to clear session for ${jid}:`, recoveryError)
-		}
 	}
 
 	return {
@@ -163,49 +82,6 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				return result
 			}
 
-			// Enhanced decryption with comprehensive error recovery
-			async function decryptWithRecovery(): Promise<Buffer> {
-				let lastError: any
-
-				for (let attempt = 0; attempt <= SESSION_RECOVERY_CONFIG.maxRetries; attempt++) {
-					try {
-						return await doDecrypt()
-					} catch (error) {
-						lastError = error
-
-						// Only attempt recovery for recoverable Signal errors
-						if (!isRecoverableSignalError(error)) {
-							throw error
-						}
-
-						// Don't retry on the last attempt
-						if (attempt === SESSION_RECOVERY_CONFIG.maxRetries) {
-							break
-						}
-
-						// Enhanced logging with error type classification
-						const errorType = isMacError(error)
-							? 'MAC'
-							: isSessionRecordError(error)
-								? 'Session Record'
-								: 'Other Signal'
-
-						console.warn(
-							`[libsignal] ${errorType} error for ${jid}, attempt ${attempt + 1}/${SESSION_RECOVERY_CONFIG.maxRetries + 1}: ${error.message}`
-						)
-
-						// Attempt recovery based on error type
-						await attemptSignalRecovery(jid, error)
-
-						// Wait before retry with exponential backoff
-						const delay = SESSION_RECOVERY_CONFIG.baseDelayMs * Math.pow(2, attempt)
-						await sleep(delay)
-					}
-				}
-
-				// If all retries failed, throw the last error
-				throw lastError
-			}
 
 			if (isLikelySyncMessage(addr)) {
 				// If it's a sync message, we can skip the transaction and recovery
@@ -215,7 +91,7 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 
 			// For regular messages, use transaction and recovery mechanism
 			return (auth.keys as SignalKeyStoreWithTransaction).transaction(async () => {
-				return await decryptWithRecovery()
+				return await doDecrypt()
 			}, jid)
 		},
 		async encryptMessage({ jid, data }) {

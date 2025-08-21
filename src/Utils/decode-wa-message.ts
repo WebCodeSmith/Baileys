@@ -24,14 +24,16 @@ export const DECRYPTION_RETRY_CONFIG = {
 	baseDelayMs: 100,
 	sessionRecordErrors: [
 		'No session record',
-		'SessionError: No session record',
+		'SessionError',
+		'Session Record error',
 		'No matching sessions',
 		'No session found'
 	],
 	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
 	allRecoverableErrors: [
 		'No session record',
-		'SessionError: No session record',
+		'SessionError',
+		'Session Record error',
 		'No session found',
 		'Bad MAC',
 		'MAC verification failed',
@@ -256,131 +258,6 @@ export const decryptMessageNode = (
 							sender,
 							author,
 							isSessionRecordError: isSessionRecordError(err)
-						}
-
-						logger.error(errorContext, 'failed to decrypt message')
-						fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
-						fullMessage.messageStubParameters = [err.message]
-					}
-				}
-			}
-
-			// if nothing was found to decrypt
-			if (!decryptables) {
-				fullMessage.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
-				fullMessage.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT]
-			}
-		}
-	}
-}
-
-/**
- * Enhanced version of decryptMessageNode that supports immediate retry requests
- * This version integrates sendRetryRequest directly into the decryption retry process
- */
-export const decryptMessageNodeWithRetryRequest = (
-	stanza: BinaryNode,
-	meId: string,
-	meLid: string,
-	repository: SignalRepository,
-	logger: ILogger,
-	sendRetryRequestFn: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
-) => {
-	const { fullMessage, author, sender } = decodeMessageNode(stanza, meId, meLid)
-	return {
-		fullMessage,
-		category: stanza.attrs.category,
-		author,
-		async decrypt() {
-			let decryptables = 0
-			if (Array.isArray(stanza.content)) {
-				for (const { tag, attrs, content } of stanza.content) {
-					if (tag === 'verified_name' && content instanceof Uint8Array) {
-						const cert = proto.VerifiedNameCertificate.decode(content)
-						const details = proto.VerifiedNameCertificate.Details.decode(cert.details!)
-						fullMessage.verifiedBizName = details.verifiedName
-					}
-
-					if (tag !== 'enc' && tag !== 'plaintext') {
-						continue
-					}
-
-					if (!(content instanceof Uint8Array)) {
-						continue
-					}
-
-					decryptables += 1
-
-					let msgBuffer: Uint8Array
-
-					try {
-						const e2eType = tag === 'plaintext' ? 'plaintext' : attrs.type
-
-						// Use enhanced retry mechanism with integrated sendRetryRequest
-						if (e2eType !== 'plaintext') {
-							msgBuffer = await decryptWithRetry(
-								async () => {
-									switch (e2eType) {
-										case 'skmsg':
-											return await repository.decryptGroupMessage({
-												group: sender,
-												authorJid: author,
-												msg: content
-											})
-										case 'pkmsg':
-										case 'msg':
-											const user = isJidUser(sender) ? sender : author
-											return await repository.decryptMessage({
-												jid: user,
-												type: e2eType,
-												ciphertext: content
-											})
-										default:
-											throw new Error(`Unknown e2e type: ${e2eType}`)
-									}
-								},
-								logger,
-								fullMessage.key,
-								e2eType,
-								stanza, // Pass the original node for retry request
-								sendRetryRequestFn // Pass the retry request function
-							)
-						} else {
-							msgBuffer = content
-						}
-
-						let msg: proto.IMessage = proto.Message.decode(
-							e2eType !== 'plaintext' ? unpadRandomMax16(msgBuffer) : msgBuffer
-						)
-						msg = msg.deviceSentMessage?.message || msg
-						if (msg.senderKeyDistributionMessage) {
-							//eslint-disable-next-line max-depth
-							try {
-								await repository.processSenderKeyDistributionMessage({
-									authorJid: author,
-									item: msg.senderKeyDistributionMessage
-								})
-							} catch (err) {
-								logger.error({ key: fullMessage.key, err }, 'failed to process sender key distribution message')
-							}
-						}
-
-						if (fullMessage.message) {
-							Object.assign(fullMessage.message, msg)
-						} else {
-							fullMessage.message = msg
-						}
-					} catch (err) {
-						// Enhanced error logging with more context
-						const errorContext = {
-							key: fullMessage.key,
-							err,
-							messageType: tag === 'plaintext' ? 'plaintext' : attrs.type,
-							sender,
-							author,
-							isSessionRecordError: isSessionRecordError(err),
-							isMacError: isMacError(err),
-							isRecoverableError: isRecoverableDecryptionError(err)
 						}
 
 						logger.error(errorContext, 'failed to decrypt message')

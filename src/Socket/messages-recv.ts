@@ -22,7 +22,7 @@ import {
 	Curve,
 	decodeMediaRetryNode,
 	decodeMessageNode,
-	decryptMessageNode, decryptMessageNodeWithRetryRequest,
+	decryptMessageNode,
 	delay,
 	derivePairingCodeKey,
 	encodeBigEndian,
@@ -811,8 +811,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				category,
 				author,
 				decrypt
-			} = decryptMessageNodeWithRetryRequest(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger,
-				sendRetryRequest)
+			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger)
 
 			if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
 				msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
@@ -833,7 +832,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						// Remove da queue de retry se descriptografia foi bem sucedida
 						if (PENDING_MESSAGE_DECRYPTIONS.has(messageKey)) {
 							PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
-							logger.debug({ messageKey }, 'Message decrypted successfully after retry')
+							console.warn({ messageKey }, 'Message decrypted successfully after retry')
 						}
 
 						// message failed to decrypt
@@ -885,11 +884,12 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						await sendMessageAck(node)
 						await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 					} catch (decryptError) {
+						console.error({ error: decryptError, messageKey }, 'Decryption failed')
 						// Tratamento específico para SessionError
 						if (decryptError.message.includes('No session') || decryptError.message.includes('Bad MAC')
 						|| decryptError.message.includes('MAC verification') || decryptError.message.includes('No matching sessions')
 						) {
-							logger.warn('trying to handle session error in message decryption')
+							console.warn('trying to handle session error in message decryption')
 
 							const pendingDecryption = PENDING_MESSAGE_DECRYPTIONS.get(messageKey)
 
@@ -901,7 +901,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 									timestamp: Date.now()
 								})
 
-								logger.warn({ messageKey, error: decryptError.message }, 'Session not found, scheduling retry')
+								console.warn({ messageKey, error: decryptError.message }, 'Session not found, scheduling retry')
 
 								// Agenda retry
 								setTimeout(() => {
@@ -920,17 +920,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							} else if (pendingDecryption.retryCount < MAX_DECRYPT_RETRY_COUNT) {
 								// Retry subsequente
 								pendingDecryption.retryCount++
-								logger.warn({ messageKey, retryCount: pendingDecryption.retryCount }, 'Retrying message decryption')
+								console.warn({ messageKey, retryCount: pendingDecryption.retryCount }, 'Retrying message decryption')
 
 								setTimeout(() => {
 									retryMessageDecryption(messageKey).catch(err =>
-										logger.error({ err, messageKey }, 'Error in retry decryption')
+										console.error({ err, messageKey }, 'Error in retry decryption')
 									)
 								}, DECRYPT_RETRY_DELAY * pendingDecryption.retryCount)
 							} else {
 								// Máximo de retries atingido
 								PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
-								logger.error({ messageKey }, 'Max retry count reached for message decryption')
+								console.error({ messageKey }, 'Max retry count reached for message decryption')
 
 								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 								msg.messageStubParameters = ['Decryption failed after retries']
