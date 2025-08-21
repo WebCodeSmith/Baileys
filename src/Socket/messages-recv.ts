@@ -19,6 +19,7 @@ import {
 	aesDecryptCTR,
 	aesEncryptGCM,
 	cleanMessage,
+	cleanupOldRetryStates,
 	Curve,
 	decodeMediaRetryNode,
 	decodeMessageNode,
@@ -181,8 +182,10 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 		const key = `${msgId}:${msgKey?.participant}`
 		let retryCount = msgRetryCache.get<number>(key) || 0
-		if (retryCount >= maxMsgRetryCount) {
-			logger.debug({ retryCount, msgId }, 'reached retry limit, clearing')
+		
+		// Enhanced retry limit check (whatsmeow uses 5 max retries)
+		if (retryCount >= 5) {
+			logger.warn({ retryCount, msgId }, 'reached maximum retry limit (5), not sending more retry receipts')
 			msgRetryCache.del(key)
 			return
 		}
@@ -192,10 +195,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 		const { account, signedPreKey, signedIdentityKey: identityKey } = authState.creds
 
+		// Enhanced retry logic inspired by whatsmeow
 		if (retryCount <= 2) {
-			//request a resend via phone
+			// Request a resend via phone (similar to whatsmeow's delayedRequestMessageFromPhone)
 			const msgId = await requestPlaceholderResend(msgKey)
-			logger.debug(`sendRetryRequest: requested placeholder resend for message ${msgId}`)
+			logger.debug({ retryCount, msgId }, 'sendRetryRequest: requested placeholder resend for message')
+		} else {
+			logger.debug({ retryCount, msgId }, 'sendRetryRequest: retry count > 2, skipping placeholder resend')
 		}
 
 		const deviceIdentity = encodeSignedDeviceIdentity(account!, true)
@@ -1409,6 +1415,22 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		if (typeof isOnline !== 'undefined') {
 			sendActiveReceipts = isOnline
 			logger.trace(`sendActiveReceipts set to "${sendActiveReceipts}"`)
+		}
+	})
+
+	// Setup automatic cleanup of old retry states (inspired by whatsmeow)
+	const cleanupInterval = setInterval(() => {
+		try {
+			cleanupOldRetryStates()
+		} catch (error) {
+			logger.warn({ error: error.message }, 'Failed to cleanup old retry states')
+		}
+	}, 60 * 60 * 1000) // Run every hour
+
+	// Cleanup on socket close
+	sock.ev.on('connection.update', ({ connection }) => {
+		if (connection === 'close') {
+			clearInterval(cleanupInterval)
 		}
 	})
 
