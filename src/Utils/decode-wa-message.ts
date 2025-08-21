@@ -113,7 +113,7 @@ export async function shouldRecreateSession(
 					shouldFetchPreKeys: true
 				}
 			}
-		} catch (error) {
+		} catch (error: any) {
 			context.logger?.warn({ jid, error: error.message }, 'Failed to check session existence')
 		}
 	}
@@ -155,7 +155,7 @@ export async function executeSessionRecreation(jid: string, context: SessionRecr
 		}
 
 		return success
-	} catch (error) {
+	} catch (error: any) {
 		context.logger?.error({ jid, error: error.message }, 'session recreation failed with error')
 		return false
 	}
@@ -189,8 +189,8 @@ export function addRecentMessage(to: string, id: string, message: any): void {
 	const key = `${to}_${id}`
 
 	// Remove old entry if it exists
-	if (recentMessagesList[recentMessagesPtr].id !== '') {
-		const oldKey = `${recentMessagesList[recentMessagesPtr].to}_${recentMessagesList[recentMessagesPtr].id}`
+	if (recentMessagesList[recentMessagesPtr]?.id !== '') {
+		const oldKey = `${recentMessagesList[recentMessagesPtr]!.to}_${recentMessagesList[recentMessagesPtr]!.id}`
 		recentMessagesMap.delete(oldKey)
 	}
 
@@ -453,7 +453,7 @@ export const decryptMessageNode = (
 								},
 								logger,
 								fullMessage.key,
-								e2eType,
+								e2eType!,
 								stanza,
 								sendRetryRequestFn,
 								contextWithRepo
@@ -570,7 +570,7 @@ async function decryptWithRetry(
 				messageRetryStates.delete(messageKeyStr)
 			}
 			return result
-		} catch (error) {
+		} catch (error: any) {
 			lastError = error
 
 			// Only retry for recoverable errors (session record, MAC, etc.)
@@ -638,7 +638,7 @@ async function decryptWithRetry(
 							} else {
 								logger.warn({ jid: senderJid }, 'Session recreation failed')
 							}
-						} catch (prekeyError) {
+						} catch (prekeyError: any) {
 							logger.warn(
 								{
 									jid: senderJid,
@@ -649,7 +649,7 @@ async function decryptWithRetry(
 						}
 					}
 				}
-			} catch (sessionCheckError) {
+			} catch (sessionCheckError: any) {
 				logger.warn(
 					{
 						jid: senderJid,
@@ -677,7 +677,7 @@ async function decryptWithRetry(
 						},
 						'sent retry request during decryption retry'
 					)
-				} catch (retryRequestError) {
+				} catch (retryRequestError: any) {
 					logger.warn(
 						{
 							key: messageKey,

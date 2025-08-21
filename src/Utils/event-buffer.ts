@@ -225,7 +225,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 					flush()
 					bufferReleased = true
 					return result
-				} catch (error) {
+				} catch (error: any) {
 					// Ensure buffer is always released, even on error
 					if (!bufferReleased) {
 						logger.warn({ error: error.message }, 'releasing buffer due to error in buffered function')

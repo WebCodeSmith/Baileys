@@ -69,7 +69,7 @@ export class GroupCipher {
 
 		try {
 			senderKeyMessage.verifySignature(senderKeyState.getSigningKeyPublic())
-		} catch (error) {
+		} catch (error: any) {
 			throw new Error(`Signature verification failed for ${this.senderKeyName.toString()}: ${error.message}`)
 		}
 
@@ -116,7 +116,7 @@ export class GroupCipher {
 	private async getPlainText(iv: Uint8Array, key: Uint8Array, ciphertext: Uint8Array): Promise<Uint8Array> {
 		try {
 			return decrypt(key, ciphertext, iv)
-		} catch (e) {
+		} catch (e: any) {
 			// Preserve the original error message for better debugging
 			const errorMessage = e?.message || 'InvalidMessageException'
 			throw new Error(`Decryption failed for ${this.senderKeyName.toString()}: ${errorMessage}`)

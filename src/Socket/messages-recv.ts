@@ -205,7 +205,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		let retryCount = msgRetryCache.get<number>(key) || 0
 
 		// Enhanced retry limit check (whatsmeow uses 5 max retries)
-		if (retryCount >= 5) {
+		if (retryCount >= maxMsgRetryCount) {
 			logger.warn({ retryCount, msgId }, 'reached maximum retry limit (5), not sending more retry receipts')
 			msgRetryCache.del(key)
 			return
@@ -968,7 +968,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				msg.message?.protocolMessage?.type === proto.Message.ProtocolMessage.Type.SHARE_PHONE_NUMBER &&
 				node.attrs.sender_pn
 			) {
-				ev.emit('chats.phoneNumberShare', { lid: node.attrs.from, jid: node.attrs.sender_pn })
+				ev.emit('chats.phoneNumberShare', { lid: node.attrs.from!, jid: node.attrs.sender_pn })
 			}
 
 			await Promise.all([
@@ -1045,9 +1045,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						cleanMessage(msg, authState.creds.me!.id)
 						await sendMessageAck(node)
 						await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
-					} catch (decryptError) {
+					} catch (decryptError: any) {
 						console.error({ error: decryptError, messageKey }, 'Decryption failed')
-						// Tratamento específico para SessionError
+
 						if (
 							decryptError.message.includes('No session') ||
 							decryptError.message.includes('Bad MAC') ||
@@ -1075,7 +1075,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 									)
 								}, DECRYPT_RETRY_DELAY)
 
-								// Por enquanto, processa como ciphertext
+								// try to process the message as a ciphertext
 								msg.messageStubType = proto.WebMessageInfo.StubType.CIPHERTEXT
 								msg.messageStubParameters = ['Session not ready, retrying...']
 
@@ -1083,7 +1083,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 								await sendMessageAck(node)
 								await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 							} else if (pendingDecryption.retryCount < MAX_DECRYPT_RETRY_COUNT) {
-								// Retry subsequente
+								// Retry
 								pendingDecryption.retryCount++
 								console.warn({ messageKey, retryCount: pendingDecryption.retryCount }, 'Retrying message decryption')
 
@@ -1093,7 +1093,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 									)
 								}, DECRYPT_RETRY_DELAY * pendingDecryption.retryCount)
 							} else {
-								// Máximo de retries atingido
+								// max retry count reached
 								PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
 								console.error({ messageKey }, 'Max retry count reached for message decryption')
 
@@ -1105,7 +1105,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 								await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 							}
 						} else {
-							// Outros erros de descriptografia
+							// other error, log and throw
 							logger.error({ error: decryptError, messageKey }, 'Decryption failed with non-session error')
 							throw decryptError
 						}
@@ -1606,7 +1606,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		() => {
 			try {
 				cleanupOldRetryStates()
-			} catch (error) {
+			} catch (error: any) {
 				logger.warn({ error: error.message }, 'Failed to cleanup old retry states')
 			}
 		},

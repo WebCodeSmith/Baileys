@@ -191,7 +191,7 @@ function signalStorage({ creds, keys }: SignalAuthState): SenderKeyStore & Recor
 				if (key) {
 					return SenderKeyRecord.deserialize(key)
 				}
-			} catch (error) {
+			} catch (error: any) {
 				console.warn(`Failed to load sender key for ${keyId}:`, error.message)
 			}
 

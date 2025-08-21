@@ -47,7 +47,7 @@ export function makeCacheableSignalKeyStore(
 				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
 				const idsToFetch: string[] = []
 				for (const id of ids) {
-					const item = cache.get<SignalDataTypeMap[typeof type]>(getUniqueId(type, id))
+					const item = cache.get<SignalDataTypeMap[typeof type]>(getUniqueId(type, id)) as any
 					if (typeof item !== 'undefined') {
 						data[id] = item
 					} else {
@@ -110,7 +110,7 @@ const getPreKeyMutex = (keyType: string): Mutex => {
  */
 async function handlePreKeyOperations(
 	data: SignalDataSet,
-	keyType: string,
+	keyType: keyof SignalDataTypeMap,
 	transactionCache: SignalDataSet,
 	mutations: SignalDataSet,
 	logger: ILogger,
@@ -124,8 +124,8 @@ async function handlePreKeyOperations(
 		if (!keyData) return
 
 		// Ensure structures exist
-		transactionCache[keyType] = transactionCache[keyType] || {}
-		mutations[keyType] = mutations[keyType] || {}
+		transactionCache[keyType] = transactionCache[keyType] || ({} as any)
+		mutations[keyType] = mutations[keyType] || ({} as any)
 
 		// Separate deletions from updates for batch processing
 		const deletionKeys: string[] = []
@@ -141,8 +141,13 @@ async function handlePreKeyOperations(
 
 		// Process updates first (no validation needed)
 		for (const keyId of updateKeys) {
-			transactionCache[keyType][keyId] = keyData[keyId]
-			mutations[keyType][keyId] = keyData[keyId]
+			if (transactionCache[keyType]) {
+				transactionCache[keyType][keyId] = keyData[keyId]!
+			}
+
+			if (mutations[keyType]) {
+				mutations[keyType][keyId] = keyData[keyId]!
+			}
 		}
 
 		// Process deletions with validation
@@ -151,9 +156,12 @@ async function handlePreKeyOperations(
 		if (isInTransaction) {
 			// In transaction, only allow deletion if key exists in cache
 			for (const keyId of deletionKeys) {
-				if (transactionCache[keyType][keyId]) {
+				if (transactionCache[keyType]) {
 					transactionCache[keyType][keyId] = null
-					mutations[keyType][keyId] = null
+					if (mutations[keyType]) {
+						// Mark for deletion in mutations
+						mutations[keyType][keyId] = null
+					}
 				} else {
 					logger.warn(`Skipping deletion of non-existent ${keyType} in transaction: ${keyId}`)
 				}
@@ -165,11 +173,12 @@ async function handlePreKeyOperations(
 		// Outside transaction, batch validate all deletions
 		if (!state) return
 
-		const existingKeys = await state.get(keyType as keyof SignalDataTypeMap, deletionKeys)
+		const existingKeys = await state.get(keyType, deletionKeys)
 		for (const keyId of deletionKeys) {
 			if (existingKeys[keyId]) {
-				transactionCache[keyType][keyId] = null
-				mutations[keyType][keyId] = null
+				if (transactionCache[keyType]) transactionCache[keyType][keyId] = null
+
+				if (mutations[keyType]) mutations[keyType][keyId] = null
 			} else {
 				logger.warn(`Skipping deletion of non-existent ${keyType}: ${keyId}`)
 			}
@@ -182,13 +191,13 @@ async function handlePreKeyOperations(
  */
 function handleNormalKeyOperations(
 	data: SignalDataSet,
-	key: string,
+	key: keyof SignalDataTypeMap,
 	transactionCache: SignalDataSet,
 	mutations: SignalDataSet
 ) {
-	Object.assign(transactionCache[key], data[key])
-	mutations[key] = mutations[key] || {}
-	Object.assign(mutations[key], data[key])
+	Object.assign(transactionCache[key]!, data[key])
+	mutations[key] = mutations[key] || ({} as any)
+	Object.assign(mutations[key]!, data[key])
 }
 
 /**
@@ -196,7 +205,7 @@ function handleNormalKeyOperations(
  */
 async function processPreKeyDeletions(
 	data: SignalDataSet,
-	keyType: string,
+	keyType: keyof SignalDataTypeMap,
 	state: SignalKeyStore,
 	logger: ILogger
 ): Promise<void> {
@@ -209,10 +218,11 @@ async function processPreKeyDeletions(
 		// Validate deletions
 		for (const keyId in keyData) {
 			if (keyData[keyId] === null) {
-				const existingKeys = await state.get(keyType as keyof SignalDataTypeMap, [keyId])
+				const existingKeys = await state.get(keyType, [keyId])
 				if (!existingKeys[keyId]) {
 					logger.warn(`Skipping deletion of non-existent ${keyType}: ${keyId}`)
-					delete data[keyType][keyId]
+
+					if (data[keyType]) delete data[keyType][keyId]
 				}
 			}
 		}
@@ -233,7 +243,7 @@ async function withMutexes<T>(
 	}
 
 	if (keyTypes.length === 1) {
-		return getKeyTypeMutex(keyTypes[0]).runExclusive(fn)
+		return getKeyTypeMutex(keyTypes[0]!).runExclusive(fn)
 	}
 
 	// For multiple mutexes, sort by key type to prevent deadlocks
@@ -305,14 +315,11 @@ export const addTransactionCapability = (
 	logger: ILogger,
 	{ maxCommitRetries, delayBetweenTriesMs }: TransactionCapabilityOptions
 ): SignalKeyStoreWithTransaction => {
-	// Mutex for each key type (session, pre-key, etc.)
-	const keyTypeMutexes = new Map<string, Mutex>()
+	// Map to hold mutexes for different key types
+	const mutexMap = new Map<string, Mutex>()
 
-	// Per-sender-key-name mutexes for fine-grained serialization
-	const senderKeyMutexes = new Map<string, Mutex>()
-
-	// Track last usage time for sender key mutexes (in milliseconds)
-	const senderKeyMutexLastUsed = new Map<string, number>()
+	// Track last usage time for sender key mutexes (for cleanup)
+	const mutexLastUsed = new Map<string, number>()
 
 	// Mutex expiration time (1 hour in milliseconds)
 	const MUTEX_EXPIRATION_TIME = 60 * 60 * 1000 // 1 hour
@@ -323,12 +330,6 @@ export const addTransactionCapability = (
 	// Cleanup timer reference
 	let cleanupTimer: NodeJS.Timeout | null = null
 
-	// Global transaction mutex
-	const transactionMutexes = new Map<string, Mutex>()
-
-	// Track last usage time for transaction mutexes (in milliseconds)
-	const transactionMutexLastUsed = new Map<string, number>()
-
 	// number of queries made to the DB during the transaction
 	// only there for logging purposes
 	let dbQueriesInTransaction = 0
@@ -336,121 +337,70 @@ export const addTransactionCapability = (
 	let mutations: SignalDataSet = {}
 
 	let transactionsInProgress = 0
-
-	// Cleanup expired sender key mutexes
-	function cleanupExpiredSenderKeyMutexes(): void {
-		const now = Date.now()
-		const expiredKeys: string[] = []
-
-		for (const [senderKeyName, lastUsed] of senderKeyMutexLastUsed.entries()) {
-			if (now - lastUsed > MUTEX_EXPIRATION_TIME) {
-				expiredKeys.push(senderKeyName)
-			}
-		}
-
-		if (expiredKeys.length > 0) {
-			for (const senderKeyName of expiredKeys) {
-				senderKeyMutexes.delete(senderKeyName)
-				senderKeyMutexLastUsed.delete(senderKeyName)
-			}
-
-			logger.info(
-				{
-					expiredCount: expiredKeys.length,
-					remainingCount: senderKeyMutexes.size
-				},
-				'cleaned up expired sender key mutexes'
-			)
+	// Start cleanup timer if not already running
+	function startCleanupTimer() {
+		if (!cleanupTimer) {
+			cleanupTimer = setInterval(() => {
+				cleanupExpiredMutexes()
+			}, CLEANUP_INTERVAL)
 		}
 	}
 
-	// Cleanup expired transaction mutexes
-	function cleanupExpiredTransactionMutexes(): void {
-		const now = Date.now()
-		const expiredKeys: string[] = []
-
-		for (const [transactionKey, lastUsed] of transactionMutexLastUsed.entries()) {
-			if (now - lastUsed > MUTEX_EXPIRATION_TIME) {
-				expiredKeys.push(transactionKey)
-			}
-		}
-
-		if (expiredKeys.length > 0) {
-			for (const transactionKey of expiredKeys) {
-				transactionMutexes.delete(transactionKey)
-				transactionMutexLastUsed.delete(transactionKey)
-			}
-
-			logger.info(
-				{
-					expiredCount: expiredKeys.length,
-					remainingCount: transactionMutexes.size
-				},
-				'cleaned up expired transaction mutexes'
-			)
-		}
-	}
-
-	// Start periodic cleanup
-	function startCleanupTimer(): void {
-		if (cleanupTimer) return
-
-		cleanupTimer = setInterval(() => {
-			cleanupExpiredSenderKeyMutexes()
-			cleanupExpiredTransactionMutexes()
-		}, CLEANUP_INTERVAL)
-
-		// Ensure cleanup happens on process exit
-		if (typeof process !== 'undefined' && process.on) {
-			process.on('exit', () => {
-				if (cleanupTimer) {
-					clearInterval(cleanupTimer)
-				}
-			})
-		}
-	}
-
-	// Start cleanup timer
 	startCleanupTimer()
+
+	// Clean up expired mutexes
+	function cleanupExpiredMutexes() {
+		const now = Date.now()
+		const expiredKeys: string[] = []
+
+		for (const [key, lastUsed] of mutexLastUsed.entries()) {
+			if (now - lastUsed > MUTEX_EXPIRATION_TIME) {
+				const mutex = mutexMap.get(key)
+				if (mutex && !mutex.isLocked()) {
+					expiredKeys.push(key)
+				}
+			}
+		}
+
+		if (expiredKeys.length > 0) {
+			for (const key of expiredKeys) {
+				mutexMap.delete(key)
+				mutexLastUsed.delete(key)
+			}
+
+			logger.info({ expiredKeys: expiredKeys.length }, 'cleaned up expired mutexes')
+		}
+	}
 
 	// Get or create a mutex for a specific key type
 	function getKeyTypeMutex(type: string): Mutex {
-		let mutex = keyTypeMutexes.get(type)
-		if (!mutex) {
-			// Create regular mutex, timeout only for critical operations
-			mutex = new Mutex()
-			keyTypeMutexes.set(type, mutex)
-		}
-
-		return mutex
+		return getMutex(`keytype:${type}`)
 	}
 
-	// Get or create a mutex for a specific sender key name
 	function getSenderKeyMutex(senderKeyName: string): Mutex {
-		// Update last used time
-		senderKeyMutexLastUsed.set(senderKeyName, Date.now())
-
-		let mutex = senderKeyMutexes.get(senderKeyName)
-		if (!mutex) {
-			mutex = new Mutex()
-			senderKeyMutexes.set(senderKeyName, mutex)
-			logger.info({ senderKeyName }, 'created new sender key mutex')
-		}
-
-		return mutex
+		return getMutex(`senderkey:${senderKeyName}`)
 	}
 
 	function getTransactionMutex(key: string): Mutex {
-		// Update last used time for transaction mutexes
-		transactionMutexLastUsed.set(key, Date.now())
+		return getMutex(`transaction:${key}`)
+	}
 
-		let mutex = transactionMutexes.get(key)
+	// Get or create a mutex for a specific key name
+	function getMutex(key: string): Mutex {
+		let mutex = mutexMap.get(key)
 		if (!mutex) {
 			mutex = new Mutex()
-			transactionMutexes.set(key, mutex)
-			logger.info({ transactionKey: key }, 'created new transaction mutex')
+			mutexMap.set(key, mutex)
+
+			if (mutexMap.size === 1) {
+				startCleanupTimer()
+			}
+
+			logger.info({ key }, 'created new mutex')
 		}
 
+		// Atualizar último uso para cleanup
+		mutexLastUsed.set(key, Date.now())
 		return mutex
 	}
 
@@ -534,13 +484,11 @@ export const addTransactionCapability = (
 					transactionCache[key] = transactionCache[key] || ({} as any)
 
 					// Special handling for pre-keys and signed-pre-keys
-					if (key === 'pre-key' || key === 'signed-pre-key') {
-						await handlePreKeyOperations(data, key as string, transactionCache, mutations, logger, true)
+					if (key === 'pre-key') {
+						await handlePreKeyOperations(data, key, transactionCache, mutations, logger, true)
 					} else {
 						// Normal handling for other key types
-						Object.assign(transactionCache[key]!, data[key])
-						mutations[key] = mutations[key] || ({} as any)
-						Object.assign(mutations[key]!, data[key])
+						handleNormalKeyOperations(data, key, transactionCache, mutations)
 					}
 				}
 			} else {
@@ -562,7 +510,7 @@ export const addTransactionCapability = (
 
 							logger.trace({ senderKeyName }, 'storing sender key')
 							// Apply changes to the store
-							await state.set(senderKeyData)
+							await state.set(senderKeyData as SignalDataSet)
 							logger.trace({ senderKeyName }, 'sender key stored')
 						})
 					}
@@ -574,8 +522,9 @@ export const addTransactionCapability = (
 					if (Object.keys(nonSenderKeyData).length > 0) {
 						await withMutexes(Object.keys(nonSenderKeyData), getKeyTypeMutex, async () => {
 							// Process pre-keys and signed-pre-keys separately with specialized mutexes
-							for (const keyType in nonSenderKeyData) {
-								if (keyType === 'pre-key' || keyType === 'signed-pre-key') {
+							for (const key_ in nonSenderKeyData) {
+								const keyType = key_ as keyof SignalDataTypeMap
+								if (keyType === 'pre-key') {
 									await processPreKeyDeletions(nonSenderKeyData, keyType, state, logger)
 								}
 							}
@@ -588,8 +537,9 @@ export const addTransactionCapability = (
 					// No sender keys - use original logic
 					await withMutexes(Object.keys(data), getKeyTypeMutex, async () => {
 						// Process pre-keys and signed-pre-keys separately with specialized mutexes
-						for (const keyType in data) {
-							if (keyType === 'pre-key' || keyType === 'signed-pre-key') {
+						for (const key_ in data) {
+							const keyType = key_ as keyof SignalDataTypeMap
+							if (keyType === 'pre-key') {
 								await processPreKeyDeletions(data, keyType, state, logger)
 							}
 						}
