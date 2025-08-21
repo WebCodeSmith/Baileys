@@ -150,7 +150,7 @@ export const fetchPreKeys = async (
 
 	try {
 		logger?.debug({ jids }, 'fetching prekeys for session recreation')
-		
+
 		// Create prekey request similar to whatsmeow's fetchPreKeys
 		const result = await queryFn({
 			tag: 'iq',
@@ -165,7 +165,7 @@ export const fetchPreKeys = async (
 					attrs: {},
 					content: jids.map(jid => ({
 						tag: 'user',
-						attrs: { 
+						attrs: {
 							jid,
 							reason: 'identity' // Same as whatsmeow
 						}
@@ -176,7 +176,7 @@ export const fetchPreKeys = async (
 
 		// Parse and inject E2E sessions using existing function
 		await parseAndInjectE2ESessions(result, signalRepository)
-		
+
 		logger?.debug({ jids }, 'successfully fetched and injected prekeys')
 		return true
 	} catch (error) {

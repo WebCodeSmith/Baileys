@@ -61,7 +61,9 @@ export class GroupCipher {
 		if (!senderKeyState) {
 			senderKeyState = record.getSenderKeyState()
 			if (!senderKeyState) {
-				throw new Error(`No session found to decrypt message for ${this.senderKeyName.toString()}, keyId: ${messageKeyId}`)
+				throw new Error(
+					`No session found to decrypt message for ${this.senderKeyName.toString()}, keyId: ${messageKeyId}`
+				)
 			}
 		}
 

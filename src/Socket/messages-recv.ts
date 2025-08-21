@@ -190,17 +190,20 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		// Check internal retry counter (whatsmeow pattern - max 10 per sender/message)
 		const internalRetryCount = incrementIncomingRetryCounter(senderJid, msgId)
 		if (shouldDropRetryRequest(senderJid, msgId)) {
-			logger.warn({ 
-				senderJid, 
-				msgId, 
-				internalRetryCount 
-			}, 'Dropping retry request: internal retry counter exceeded limit (10)')
+			logger.warn(
+				{
+					senderJid,
+					msgId,
+					internalRetryCount
+				},
+				'Dropping retry request: internal retry counter exceeded limit (10)'
+			)
 			return
 		}
 
 		const key = `${msgId}:${msgKey?.participant}`
 		let retryCount = msgRetryCache.get<number>(key) || 0
-		
+
 		// Enhanced retry limit check (whatsmeow uses 5 max retries)
 		if (retryCount >= 5) {
 			logger.warn({ retryCount, msgId }, 'reached maximum retry limit (5), not sending more retry receipts')
@@ -218,23 +221,32 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			// First retry - request resend via phone (whatsmeow pattern)
 			try {
 				const msgId = await requestPlaceholderResend(msgKey)
-				logger.debug({ 
-					retryCount, 
-					msgId, 
-					internalRetryCount 
-				}, 'sendRetryRequest: requested placeholder resend for message (first retry)')
+				logger.debug(
+					{
+						retryCount,
+						msgId,
+						internalRetryCount
+					},
+					'sendRetryRequest: requested placeholder resend for message (first retry)'
+				)
 			} catch (error) {
-				logger.warn({ 
-					msgId, 
-					error: (error as Error).message 
-				}, 'Failed to request placeholder resend')
+				logger.warn(
+					{
+						msgId,
+						error: (error as Error).message
+					},
+					'Failed to request placeholder resend'
+				)
 			}
 		} else {
-			logger.debug({ 
-				retryCount, 
-				msgId, 
-				internalRetryCount 
-			}, 'sendRetryRequest: retry count > 1, skipping placeholder resend')
+			logger.debug(
+				{
+					retryCount,
+					msgId,
+					internalRetryCount
+				},
+				'sendRetryRequest: retry count > 1, skipping placeholder resend'
+			)
 		}
 
 		const deviceIdentity = encodeSignedDeviceIdentity(account!, true)
@@ -277,7 +289,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			// - Include when forced (MAC errors, session errors)
 			// - Include when retry count > 1 (session recreation scenarios)
 			const shouldIncludeKeys = retryCount === 1 || forceIncludeKeys || retryCount > 1
-			
+
 			if (shouldIncludeKeys) {
 				const { update, preKeys } = await getNextPreKeys(authState, 1)
 
@@ -298,20 +310,26 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				})
 
 				ev.emit('creds.update', update)
-				
-				logger.debug({ 
-					retryCount, 
-					forceIncludeKeys, 
-					shouldIncludeKeys,
-					internalRetryCount 
-				}, 'Including keys and device identity in retry receipt')
+
+				logger.debug(
+					{
+						retryCount,
+						forceIncludeKeys,
+						shouldIncludeKeys,
+						internalRetryCount
+					},
+					'Including keys and device identity in retry receipt'
+				)
 			} else {
-				logger.debug({ 
-					retryCount, 
-					forceIncludeKeys, 
-					shouldIncludeKeys,
-					internalRetryCount 
-				}, 'Not including keys in retry receipt')
+				logger.debug(
+					{
+						retryCount,
+						forceIncludeKeys,
+						shouldIncludeKeys,
+						internalRetryCount
+					},
+					'Not including keys in retry receipt'
+				)
 			}
 
 			await sendNode(receipt)
@@ -772,58 +790,73 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						// correctly set who is asking for the retry
 						key.participant = key.participant || attrs.from
 						const retryNode = getBinaryNodeChild(node, 'retry')
-						
+
 						// Check internal retry counter (whatsmeow pattern)
 						const senderJid = attrs.from || ''
 						const messageId = ids[0] || ''
-						
+
 						if (shouldDropRetryRequest(senderJid, messageId)) {
-							logger.warn({ 
-								senderJid, 
-								messageId,
-								attrs 
-							}, 'Dropping retry receipt: internal retry counter exceeded limit (10)')
+							logger.warn(
+								{
+									senderJid,
+									messageId,
+									attrs
+								},
+								'Dropping retry receipt: internal retry counter exceeded limit (10)'
+							)
 							return
 						}
-						
+
 						// Increment internal retry counter
 						const internalRetryCount = incrementIncomingRetryCounter(senderJid, messageId)
-						
+
 						if (willSendMessageAgain(ids[0]!, key.participant!)) {
 							if (key.fromMe) {
 								try {
-									logger.debug({ 
-										attrs, 
-										key, 
-										internalRetryCount 
-									}, 'recv retry request')
-									
+									logger.debug(
+										{
+											attrs,
+											key,
+											internalRetryCount
+										},
+										'recv retry request'
+									)
+
 									// Check if we have the message in recent cache (whatsmeow pattern)
 									const recentMessage = getRecentMessage(key.remoteJid || '', messageId)
 									if (recentMessage) {
-										logger.debug({ 
-											jid: key.remoteJid, 
-											id: messageId 
-										}, 'Found message in recent cache for retry')
+										logger.debug(
+											{
+												jid: key.remoteJid,
+												id: messageId
+											},
+											'Found message in recent cache for retry'
+										)
 									}
-									
+
 									await sendMessagesAgain(key, ids, retryNode!)
 								} catch (error: any) {
 									logger.error({ key, ids, trace: error.stack }, 'error in sending message again')
 								}
 							} else {
-								logger.info({ 
-									attrs, 
-									key, 
-									internalRetryCount 
-								}, 'recv retry for not fromMe message')
+								logger.info(
+									{
+										attrs,
+										key,
+										internalRetryCount
+									},
+									'recv retry for not fromMe message'
+								)
 							}
 						} else {
-							logger.info({ 
-								attrs, 
-								key, 
-								internalRetryCount 
-							}, 'will not send message again, as sent too many times')
+							logger.info(
+								{
+									attrs,
+									key,
+									internalRetryCount
+								},
+								'will not send message again, as sent too many times'
+							)
 						}
 					}
 				})
@@ -917,7 +950,15 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				category,
 				author,
 				decrypt
-			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger, sendRetryRequest, sessionContext)
+			} = decryptMessageNode(
+				node,
+				authState.creds.me!.id,
+				authState.creds.me!.lid || '',
+				signalRepository,
+				logger,
+				sendRetryRequest,
+				sessionContext
+			)
 
 			if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
 				msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
@@ -944,10 +985,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						// Add to recent messages cache for retry receipts (whatsmeow pattern)
 						if (msg.key?.remoteJid && msg.key?.id) {
 							addRecentMessage(msg.key.remoteJid, msg.key.id, msg)
-							logger.debug({ 
-								jid: msg.key.remoteJid, 
-								id: msg.key.id 
-							}, 'Added message to recent cache for retry receipts')
+							logger.debug(
+								{
+									jid: msg.key.remoteJid,
+									id: msg.key.id
+								},
+								'Added message to recent cache for retry receipts'
+							)
 						}
 
 						// message failed to decrypt
@@ -965,7 +1009,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 									const encNode = getBinaryNodeChild(node, 'enc')
 
 									console.warn({ messageKey, node }, 'Message decryption failed, sending retry request')
-									
+
 									await sendRetryRequest(node, !encNode)
 									if (retryRequestDelayMs) {
 										await delay(retryRequestDelayMs)
@@ -1004,8 +1048,11 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					} catch (decryptError) {
 						console.error({ error: decryptError, messageKey }, 'Decryption failed')
 						// Tratamento específico para SessionError
-						if (decryptError.message.includes('No session') || decryptError.message.includes('Bad MAC')
-						|| decryptError.message.includes('MAC verification') || decryptError.message.includes('No matching sessions')
+						if (
+							decryptError.message.includes('No session') ||
+							decryptError.message.includes('Bad MAC') ||
+							decryptError.message.includes('MAC verification') ||
+							decryptError.message.includes('No matching sessions')
 						) {
 							console.warn('trying to handle session error in message decryption')
 
@@ -1555,13 +1602,16 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	})
 
 	// Setup automatic cleanup of old retry states (inspired by whatsmeow)
-	const cleanupInterval = setInterval(() => {
-		try {
-			cleanupOldRetryStates()
-		} catch (error) {
-			logger.warn({ error: error.message }, 'Failed to cleanup old retry states')
-		}
-	}, 60 * 60 * 1000) // Run every hour
+	const cleanupInterval = setInterval(
+		() => {
+			try {
+				cleanupOldRetryStates()
+			} catch (error) {
+				logger.warn({ error: error.message }, 'Failed to cleanup old retry states')
+			}
+		},
+		60 * 60 * 1000
+	) // Run every hour
 
 	// Cleanup on socket close
 	sock.ev.on('connection.update', ({ connection }) => {

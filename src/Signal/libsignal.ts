@@ -83,7 +83,6 @@ export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository
 				return result
 			}
 
-
 			if (isLikelySyncMessage(addr)) {
 				// If it's a sync message, we can skip the transaction and recovery
 				// as it is likely to be a system message that doesn't require strict atomicity

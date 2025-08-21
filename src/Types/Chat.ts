@@ -62,20 +62,20 @@ export type Chat = proto.IConversation & {
 
 export type ChatUpdate = Partial<
 	Chat & {
-	/**
-	 * if specified in the update,
-	 * the EV buffer will check if the condition gets fulfilled before applying the update
-	 * Right now, used to determine when to release an app state sync event
-	 *
-	 * @returns true, if the update should be applied;
-	 * false if it can be discarded;
-	 * undefined if the condition is not yet fulfilled
-	 * */
-	conditional: (bufferedData: BufferedEventData) => boolean | undefined
+		/**
+		 * if specified in the update,
+		 * the EV buffer will check if the condition gets fulfilled before applying the update
+		 * Right now, used to determine when to release an app state sync event
+		 *
+		 * @returns true, if the update should be applied;
+		 * false if it can be discarded;
+		 * undefined if the condition is not yet fulfilled
+		 * */
+		conditional: (bufferedData: BufferedEventData) => boolean | undefined
 
-	/** last update time */
-	timestamp?: number
-}
+		/** last update time */
+		timestamp?: number
+	}
 >
 
 /**
@@ -86,32 +86,32 @@ export type LastMessageList = MinimalMessage[] | proto.SyncActionValue.ISyncActi
 
 export type ChatModification =
 	| {
-	archive: boolean
-	lastMessages: LastMessageList
-}
+			archive: boolean
+			lastMessages: LastMessageList
+	  }
 	| { pushNameSetting: string }
 	| { pin: boolean }
 	| {
-	/** mute for duration, or provide timestamp of mute to remove*/
-	mute: number | null
-}
+			/** mute for duration, or provide timestamp of mute to remove*/
+			mute: number | null
+	  }
 	| {
 			clear: boolean
 			lastMessages: LastMessageList
 	  }
 	| {
-	deleteForMe: { deleteMedia: boolean; key: WAMessageKey; timestamp: number }
-}
+			deleteForMe: { deleteMedia: boolean; key: WAMessageKey; timestamp: number }
+	  }
 	| {
-	star: {
-		messages: { id: string; fromMe?: boolean }[]
-		star: boolean
-	}
-}
+			star: {
+				messages: { id: string; fromMe?: boolean }[]
+				star: boolean
+			}
+	  }
 	| {
-	markRead: boolean
-	lastMessages: LastMessageList
-}
+			markRead: boolean
+			lastMessages: LastMessageList
+	  }
 	| { delete: true; lastMessages: LastMessageList }
 	| { contact: proto.SyncActionValue.IContactAction | null }
 	| { disableLinkPreviews: proto.SyncActionValue.IPrivacySettingDisableLinkPreviewsAction }

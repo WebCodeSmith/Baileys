@@ -89,10 +89,13 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		flushTimeout = setTimeout(() => {
 			const timeSinceLastFlush = Date.now() - lastFlushAttempt
 			if (buffersInProgress > 0 && timeSinceLastFlush > MAX_BUFFER_TIME) {
-				logger.warn({
-					buffersInProgress,
-					timeSinceLastFlush
-				}, 'Force flushing stuck event buffer')
+				logger.warn(
+					{
+						buffersInProgress,
+						timeSinceLastFlush
+					},
+					'Force flushing stuck event buffer'
+				)
 				flush(true)
 			}
 		}, MAX_BUFFER_TIME)
@@ -156,7 +159,8 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			if (update.conditional) {
 				// Remove stale conditional updates (older than 5 minutes)
 				const updateAge = now - (update.timestamp || 0)
-				if (updateAge > 300000) { // 5 minutes
+				if (updateAge > 300000) {
+					// 5 minutes
 					staleChatUpdatesRemoved += 1
 					logger.debug({ chatId: update.id, updateAge }, 'removing stale conditional chat update')
 					continue
@@ -175,11 +179,14 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 		data = newData
 
-		logger.trace({
-			conditionalChatUpdatesLeft,
-			staleChatUpdatesRemoved,
-			buffersInProgress
-		}, 'released buffered events')
+		logger.trace(
+			{
+				conditionalChatUpdatesLeft,
+				staleChatUpdatesRemoved,
+				buffersInProgress
+			},
+			'released buffered events'
+		)
 
 		return true
 	}

@@ -263,15 +263,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 		if (jidsRequiringFetch.length) {
 			logger.debug({ jidsRequiringFetch }, 'fetching sessions')
-			
+
 			// Use the new fetchPreKeys function for consistency with whatsmeow
-			const success = await fetchPreKeys(
-				jidsRequiringFetch,
-				query,
-				signalRepository,
-				logger
-			)
-			
+			const success = await fetchPreKeys(jidsRequiringFetch, query, signalRepository, logger)
+
 			didFetchNewSession = success
 		}
 
