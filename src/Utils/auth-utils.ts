@@ -13,7 +13,7 @@ import type {
 } from '../Types'
 import { Curve, signedKeyPair } from './crypto'
 import { delay, generateRegistrationId } from './generics'
-import { ILogger } from './logger'
+import type { ILogger } from './logger'
 
 /**
  * Adds caching capability to a SignalKeyStore
@@ -28,7 +28,7 @@ export function makeCacheableSignalKeyStore(
 ): SignalKeyStore {
 	const cache =
 		_cache ||
-		new NodeCache({
+		new NodeCache<SignalDataTypeMap[keyof SignalDataTypeMap]>({
 			stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE, // 5 minutes
 			useClones: false,
 			deleteOnExpire: true
@@ -74,8 +74,8 @@ export function makeCacheableSignalKeyStore(
 			return cacheMutex.runExclusive(async () => {
 				let keys = 0
 				for (const type in data) {
-					for (const id in data[type]) {
-						cache.set(getUniqueId(type, id), data[type][id])
+					for (const id in data[type as keyof SignalDataTypeMap]) {
+						cache.set(getUniqueId(type, id), data[type as keyof SignalDataTypeMap]![id]!)
 						keys += 1
 					}
 				}
@@ -499,7 +499,7 @@ export const addTransactionCapability = (
 					}
 				}
 
-				return ids.reduce((dict, id) => {
+				return ids.reduce((dict: { [T in string]: any }, id) => {
 					const value = transactionCache[type]?.[id]
 					if (value) {
 						dict[id] = value
@@ -529,15 +529,18 @@ export const addTransactionCapability = (
 		set: async data => {
 			if (isInTransaction()) {
 				logger.trace({ types: Object.keys(data) }, 'caching in transaction')
-				for (const key in data) {
-					transactionCache[key] = transactionCache[key] || {}
+				for (const key_ in data) {
+					const key = key_ as keyof SignalDataTypeMap
+					transactionCache[key] = transactionCache[key] || ({} as any)
 
 					// Special handling for pre-keys and signed-pre-keys
 					if (key === 'pre-key' || key === 'signed-pre-key') {
-						await handlePreKeyOperations(data, key, transactionCache, mutations, logger, true)
+						await handlePreKeyOperations(data, key as string, transactionCache, mutations, logger, true)
 					} else {
 						// Normal handling for other key types
-						handleNormalKeyOperations(data, key, transactionCache, mutations)
+						Object.assign(transactionCache[key]!, data[key])
+						mutations[key] = mutations[key] || ({} as any)
+						Object.assign(mutations[key]!, data[key])
 					}
 				}
 			} else {

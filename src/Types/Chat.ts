@@ -1,10 +1,10 @@
-import type {proto} from '../../WAProto'
-import type {AccountSettings} from './Auth'
-import type {BufferedEventData} from './Events'
-import type {LabelActionBody} from './Label'
-import type {ChatLabelAssociationActionBody} from './LabelAssociation'
-import type {MessageLabelAssociationActionBody} from './LabelAssociation'
-import type {MinimalMessage, WAMessageKey} from './Message'
+import type { proto } from '../../WAProto/index.js'
+import type { AccountSettings } from './Auth'
+import type { BufferedEventData } from './Events'
+import type { LabelActionBody } from './Label'
+import type { ChatLabelAssociationActionBody } from './LabelAssociation'
+import type { MessageLabelAssociationActionBody } from './LabelAssociation'
+import type { MinimalMessage, WAMessageKey } from './Message'
 
 /** privacy settings in WhatsApp Web */
 export type WAPrivacyValue = 'all' | 'contacts' | 'contact_blacklist' | 'none'
@@ -96,8 +96,9 @@ export type ChatModification =
 	mute: number | null
 }
 	| {
-	clear: boolean
-}
+			clear: boolean
+			lastMessages: LastMessageList
+	  }
 	| {
 	deleteForMe: { deleteMedia: boolean; key: WAMessageKey; timestamp: number }
 }
@@ -112,6 +113,8 @@ export type ChatModification =
 	lastMessages: LastMessageList
 }
 	| { delete: true; lastMessages: LastMessageList }
+	| { contact: proto.SyncActionValue.IContactAction | null }
+	| { disableLinkPreviews: proto.SyncActionValue.IPrivacySettingDisableLinkPreviewsAction }
 	// Label
 	| { addLabel: LabelActionBody }
 	// Label assosiation
