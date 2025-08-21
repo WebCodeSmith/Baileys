@@ -23,6 +23,7 @@ import {
 	cleanupOldRetryStates,
 	Curve,
 	decodeMediaRetryNode,
+	getMessageForRetry,
 	decodeMessageNode,
 	decryptMessageNode,
 	delay,
@@ -684,8 +685,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	}
 
 	const sendMessagesAgain = async (key: proto.IMessageKey, ids: string[], retryNode: BinaryNode) => {
-		// todo: implement a cache to store the last 256 sent messages (copy whatsmeow)
-		const msgs = await Promise.all(ids.map(id => getMessage({ ...key, id })))
+		// Use WhatsmeOW-compatible message retrieval (cache first, then callback)
+		const msgs = await Promise.all(ids.map(id => getMessageForRetry(key.remoteJid!, id, getMessage)))
 		const remoteJid = key.remoteJid!
 		const participant = key.participant || remoteJid
 		// if it's the primary jid sending the request
@@ -982,17 +983,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							console.warn({ messageKey }, 'Message decrypted successfully after retry')
 						}
 
-						// Add to recent messages cache for retry receipts (whatsmeow pattern)
-						if (msg.key?.remoteJid && msg.key?.id) {
-							addRecentMessage(msg.key.remoteJid, msg.key.id, msg)
-							logger.debug(
-								{
-									jid: msg.key.remoteJid,
-									id: msg.key.id
-								},
-								'Added message to recent cache for retry receipts'
-							)
-						}
+						// Note: addRecentMessage is now called only on outgoing messages in messages-send.ts
+						// This follows WhatsmeOW pattern where only sent messages are cached for retry receipts
 
 						// message failed to decrypt
 						if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {

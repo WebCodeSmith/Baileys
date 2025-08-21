@@ -66,7 +66,7 @@ const sessionRecreateHistory = new Map<string, number>()
 // Recent messages cache for retry receipts (whatsmeow-inspired)
 const RECENT_MESSAGES_SIZE = 512
 export interface RecentMessage {
-	message: any
+	message: proto.IMessage
 	timestamp: number
 }
 
@@ -185,17 +185,18 @@ export function shouldStopRetrying(messageKey: string): boolean {
 	return state.retryCount >= DECRYPTION_RETRY_CONFIG.maxRetries
 }
 
-// Recent message management functions (whatsmeow-inspired)
-export function addRecentMessage(to: string, id: string, message: any): void {
+// Recent message management functions (whatsmeow-compatible)
+export function addRecentMessage(to: string, id: string, message: proto.IMessage): void {
 	const key = `${to}_${id}`
 
-	// Remove old entry if it exists
+	// Remove old entry if it exists (circular buffer pattern from whatsmeow)
 	if (recentMessagesList[recentMessagesPtr]?.id !== '') {
-		const oldKey = `${recentMessagesList[recentMessagesPtr]!.to}_${recentMessagesList[recentMessagesPtr]!.id}`
+		const oldEntry = recentMessagesList[recentMessagesPtr]!
+		const oldKey = `${oldEntry.to}_${oldEntry.id}`
 		recentMessagesMap.delete(oldKey)
 	}
 
-	// Add new entry
+	// Add new entry (store the actual proto.IMessage like whatsmeow)
 	recentMessagesMap.set(key, {
 		message,
 		timestamp: Date.now()
@@ -208,6 +209,22 @@ export function addRecentMessage(to: string, id: string, message: any): void {
 export function getRecentMessage(to: string, id: string): RecentMessage | null {
 	const key = `${to}_${id}`
 	return recentMessagesMap.get(key) || null
+}
+
+// WhatsmeOW-compatible message retrieval for retry receipts
+export function getMessageForRetry(to: string, id: string, getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>): Promise<proto.IMessage | null> {
+	// First, try to get from recent messages cache (whatsmeow pattern)
+	const recentMsg = getRecentMessage(to, id)
+	if (recentMsg?.message) {
+		return Promise.resolve(recentMsg.message)
+	}
+	
+	// If not in cache and getMessage callback is provided, use it
+	if (getMessage) {
+		return getMessage({ remoteJid: to, id }).then(msg => msg || null)
+	}
+	
+	return Promise.resolve(null)
 }
 
 // Internal retry counter management (whatsmeow pattern)

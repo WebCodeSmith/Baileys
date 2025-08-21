@@ -28,7 +28,8 @@ import {
 	getUrlFromDirectPath,
 	getWAUploadToServer,
 	normalizeMessageContent,
-	unixTimestampSeconds
+	unixTimestampSeconds,
+	addRecentMessage
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
 import {
@@ -629,6 +630,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			logger.debug({ msgId }, `sending message to ${participants.length} devices`)
 
 			await sendNode(stanza)
+			
+			// Add to recent messages cache for retry receipts (WhatsmeOW pattern)
+			// Only add non-peer messages to cache (same as WhatsmeOW)
+			if (!participant) {
+				addRecentMessage(destinationJid, msgId!, message)
+				logger.debug({ jid: destinationJid, msgId }, 'Added outgoing message to recent cache for retry receipts')
+			}
 		}, meId)
 
 		return msgId
