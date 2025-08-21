@@ -22,7 +22,12 @@ export const MISSING_KEYS_ERROR_TEXT = 'Key used already or never filled'
 export const DECRYPTION_RETRY_CONFIG = {
 	maxRetries: 5,
 	baseDelayMs: 100,
-	sessionRecordErrors: ['No session record', 'SessionError: No session record', 'No matching sessions', 'No session found'],
+	sessionRecordErrors: [
+		'No session record',
+		'SessionError: No session record',
+		'No matching sessions',
+		'No session found'
+	],
 	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error'],
 	allRecoverableErrors: [
 		'No session record',
@@ -273,37 +278,31 @@ export const decryptMessageNode = (
  * Utility function to check if an error is recoverable (session record or MAC errors)
  */
 function isRecoverableDecryptionError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || '';
-	return DECRYPTION_RETRY_CONFIG.allRecoverableErrors.some(errorPattern =>
-		errorMessage.includes(errorPattern)
-	);
+	const errorMessage = error?.message || error?.toString() || ''
+	return DECRYPTION_RETRY_CONFIG.allRecoverableErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
 
 /**
  * Utility function to check if an error is specifically a MAC error
  */
 function isMacError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || '';
-	return DECRYPTION_RETRY_CONFIG.macErrors.some(errorPattern =>
-		errorMessage.includes(errorPattern)
-	);
+	const errorMessage = error?.message || error?.toString() || ''
+	return DECRYPTION_RETRY_CONFIG.macErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
 
 /**
  * Utility function to check if an error is related to missing session record
  */
 function isSessionRecordError(error: any): boolean {
-	const errorMessage = error?.message || error?.toString() || '';
-	return DECRYPTION_RETRY_CONFIG.sessionRecordErrors.some(errorPattern =>
-		errorMessage.includes(errorPattern)
-	);
+	const errorMessage = error?.message || error?.toString() || ''
+	return DECRYPTION_RETRY_CONFIG.sessionRecordErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
 
 /**
  * Sleep utility for retry delays
  */
 function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+	return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 /**
@@ -315,46 +314,47 @@ async function decryptWithRetry(
 	messageKey: WAMessageKey,
 	messageType: string
 ): Promise<Uint8Array> {
-	let lastError: any;
+	let lastError: any
 
 	for (let attempt = 0; attempt <= DECRYPTION_RETRY_CONFIG.maxRetries; attempt++) {
 		try {
-			return await decryptFn();
+			return await decryptFn()
 		} catch (error) {
-			lastError = error;
+			lastError = error
 
 			// Only retry for recoverable errors (session record, MAC, etc.)
 			if (!isRecoverableDecryptionError(error)) {
-				throw error;
+				throw error
 			}
 
 			// Don't retry on the last attempt
 			if (attempt === DECRYPTION_RETRY_CONFIG.maxRetries) {
-				break;
+				break
 			}
 
 			// Calculate delay with exponential backoff
-			const delay = DECRYPTION_RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt);
+			const delay = DECRYPTION_RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt)
 
 			// Enhanced logging with error type classification
-			const errorType = isMacError(error) ? 'MAC' :
-							 isSessionRecordError(error) ? 'Session Record' :
-							 'Other Recoverable';
+			const errorType = isMacError(error) ? 'MAC' : isSessionRecordError(error) ? 'Session Record' : 'Other Recoverable'
 
-			logger.warn({
-				key: messageKey,
-				attempt: attempt + 1,
-				maxRetries: DECRYPTION_RETRY_CONFIG.maxRetries + 1,
-				error: error.message,
-				errorType,
-				messageType,
-				delayMs: delay
-			}, `${errorType} error detected, retrying decryption`);
+			logger.warn(
+				{
+					key: messageKey,
+					attempt: attempt + 1,
+					maxRetries: DECRYPTION_RETRY_CONFIG.maxRetries + 1,
+					error: error.message,
+					errorType,
+					messageType,
+					delayMs: delay
+				},
+				`${errorType} error detected, retrying decryption`
+			)
 
-			await sleep(delay);
+			await sleep(delay)
 		}
 	}
 
 	// If all retries failed, throw the last error
-	throw lastError;
+	throw lastError
 }

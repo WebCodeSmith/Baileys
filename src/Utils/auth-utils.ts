@@ -325,7 +325,7 @@ export const addTransactionCapability = (
 
 	// Global transaction mutex
 	const transactionMutexes = new Map<string, Mutex>()
-	
+
 	// Track last usage time for transaction mutexes (in milliseconds)
 	const transactionMutexLastUsed = new Map<string, number>()
 
@@ -354,10 +354,13 @@ export const addTransactionCapability = (
 				senderKeyMutexLastUsed.delete(senderKeyName)
 			}
 
-			logger.info({
-				expiredCount: expiredKeys.length,
-				remainingCount: senderKeyMutexes.size
-			}, 'cleaned up expired sender key mutexes')
+			logger.info(
+				{
+					expiredCount: expiredKeys.length,
+					remainingCount: senderKeyMutexes.size
+				},
+				'cleaned up expired sender key mutexes'
+			)
 		}
 	}
 
@@ -378,10 +381,13 @@ export const addTransactionCapability = (
 				transactionMutexLastUsed.delete(transactionKey)
 			}
 
-			logger.info({
-				expiredCount: expiredKeys.length,
-				remainingCount: transactionMutexes.size
-			}, 'cleaned up expired transaction mutexes')
+			logger.info(
+				{
+					expiredCount: expiredKeys.length,
+					remainingCount: transactionMutexes.size
+				},
+				'cleaned up expired transaction mutexes'
+			)
 		}
 	}
 
@@ -429,7 +435,6 @@ export const addTransactionCapability = (
 			mutex = new Mutex()
 			senderKeyMutexes.set(senderKeyName, mutex)
 			logger.info({ senderKeyName }, 'created new sender key mutex')
-
 		}
 
 		return mutex
@@ -438,13 +443,12 @@ export const addTransactionCapability = (
 	function getTransactionMutex(key: string): Mutex {
 		// Update last used time for transaction mutexes
 		transactionMutexLastUsed.set(key, Date.now())
-		
+
 		let mutex = transactionMutexes.get(key)
 		if (!mutex) {
 			mutex = new Mutex()
 			transactionMutexes.set(key, mutex)
 			logger.info({ transactionKey: key }, 'created new transaction mutex')
-
 		}
 
 		return mutex
@@ -596,48 +600,57 @@ export const addTransactionCapability = (
 		isInTransaction,
 		...(state.clear ? { clear: state.clear } : {}),
 		async transaction(work, key) {
-			return getTransactionMutex(key).acquire().then(async releaseTxMutex => {
-				let result: Awaited<ReturnType<typeof work>>
-				try {
-					transactionsInProgress += 1
-					if (transactionsInProgress === 1) {
-						logger.trace('entering transaction')
-					}
-
-					// Release the transaction mutex now that we've updated the counter
-					// This allows other transactions to start preparing
-					releaseTxMutex()
-
+			return getTransactionMutex(key)
+				.acquire()
+				.then(async releaseTxMutex => {
+					let result: Awaited<ReturnType<typeof work>>
 					try {
-						result = await work()
-						// commit if this is the outermost transaction
+						transactionsInProgress += 1
 						if (transactionsInProgress === 1) {
-							const hasMutations = Object.keys(mutations).length > 0
+							logger.trace('entering transaction')
+						}
 
-							if (hasMutations) {
-								logger.trace('committing transaction')
-								await commitWithRetry(mutations, state, getKeyTypeMutex, maxCommitRetries, delayBetweenTriesMs, logger)
-								logger.trace({ dbQueriesInTransaction }, 'transaction completed')
-							} else {
-								logger.trace('no mutations in transaction')
+						// Release the transaction mutex now that we've updated the counter
+						// This allows other transactions to start preparing
+						releaseTxMutex()
+
+						try {
+							result = await work()
+							// commit if this is the outermost transaction
+							if (transactionsInProgress === 1) {
+								const hasMutations = Object.keys(mutations).length > 0
+
+								if (hasMutations) {
+									logger.trace('committing transaction')
+									await commitWithRetry(
+										mutations,
+										state,
+										getKeyTypeMutex,
+										maxCommitRetries,
+										delayBetweenTriesMs,
+										logger
+									)
+									logger.trace({ dbQueriesInTransaction }, 'transaction completed')
+								} else {
+									logger.trace('no mutations in transaction')
+								}
+							}
+						} finally {
+							transactionsInProgress -= 1
+							if (transactionsInProgress === 0) {
+								transactionCache = {}
+								mutations = {}
+								dbQueriesInTransaction = 0
 							}
 						}
-					} finally {
-						transactionsInProgress -= 1
-						if (transactionsInProgress === 0) {
-							transactionCache = {}
-							mutations = {}
-							dbQueriesInTransaction = 0
-						}
-					}
 
-					return result
-				} catch (error) {
-					// If we haven't released the transaction mutex yet, release it
-					releaseTxMutex()
-					throw error
-				}
-			})
+						return result
+					} catch (error) {
+						// If we haven't released the transaction mutex yet, release it
+						releaseTxMutex()
+						throw error
+					}
+				})
 		}
 	}
 }
