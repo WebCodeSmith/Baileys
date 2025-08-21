@@ -64,7 +64,7 @@ const messageRetryStates = new Map<string, MessageRetryState>()
 const sessionRecreateHistory = new Map<string, number>()
 
 // Recent messages cache for retry receipts (whatsmeow-inspired)
-const RECENT_MESSAGES_SIZE = 256
+const RECENT_MESSAGES_SIZE = 512
 export interface RecentMessage {
 	message: any
 	timestamp: number
@@ -619,7 +619,7 @@ async function decryptWithRetry(
 				recreateReason = sessionResult.reason
 				
 				if (recreate) {
-					logger.info({ 
+					logger.warn({
 						key: messageKey, 
 						reason: recreateReason,
 						shouldFetchPreKeys 

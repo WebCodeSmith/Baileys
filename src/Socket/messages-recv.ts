@@ -955,7 +955,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 								return sendMessageAck(node, NACK_REASONS.ParsingError)
 							}
 
-							await retryMutex.mutex(async () => {
+							retryMutex.mutex(async () => {
 								if (ws.isOpen) {
 									if (getBinaryNodeChild(node, 'unavailable')) {
 										return
