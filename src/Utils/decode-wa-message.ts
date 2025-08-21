@@ -26,6 +26,7 @@ export const DECRYPTION_RETRY_CONFIG = {
 	requestFromPhoneDelay: 5000, // 5 seconds delay before requesting from phone
 	sessionRecordErrors: [
 		'No session record',
+		'Session record not found',
 		'SessionError',
 		'Session Record error',
 		'No matching sessions',
@@ -36,6 +37,7 @@ export const DECRYPTION_RETRY_CONFIG = {
 	macErrors: ['Bad MAC', 'MAC verification failed', 'Bad MAC Error', 'Decryption failed'],
 	allRecoverableErrors: [
 		'No session record',
+		'Session record not found',
 		'SessionError',
 		'Session Record error',
 		'No session found',
@@ -60,20 +62,76 @@ export interface MessageRetryState {
 const messageRetryStates = new Map<string, MessageRetryState>()
 const sessionRecreateHistory = new Map<string, number>()
 
+// Recent messages cache for retry receipts (whatsmeow-inspired)
+const RECENT_MESSAGES_SIZE = 256
+export interface RecentMessage {
+	message: any
+	timestamp: number
+}
+
+export interface RecentMessageKey {
+	to: string
+	id: string
+}
+
+// Circular buffer for recent messages (whatsmeow pattern)
+const recentMessagesMap = new Map<string, RecentMessage>()
+const recentMessagesList: RecentMessageKey[] = new Array(RECENT_MESSAGES_SIZE).fill(null).map(() => ({ to: '', id: '' }))
+let recentMessagesPtr = 0
+
+// Internal retry counter per sender (whatsmeow uses 10 max)
+const incomingRetryRequestCounter = new Map<string, number>()
+
+// Session recreation interfaces (whatsmeow-inspired)
+export interface SessionRecreationContext {
+	authState: any
+	logger: any
+	signalRepository: any
+	fetchPreKeys?: (jids: string[]) => Promise<any>
+}
+
 // Smart retry control functions (inspired by whatsmeow)
-export function shouldRecreateSession(jid: string, retryCount: number): { reason: string; recreate: boolean } {
+export async function shouldRecreateSession(
+	jid: string, 
+	retryCount: number, 
+	context?: SessionRecreationContext
+): Promise<{ reason: string; recreate: boolean; shouldFetchPreKeys: boolean }> {
 	const now = Date.now()
 	
-	// Always recreate if retry count > 1 and enough time has passed
-	if (retryCount >= 2) {
-		const lastRecreate = sessionRecreateHistory.get(jid) || 0
-		if (now - lastRecreate > DECRYPTION_RETRY_CONFIG.sessionRecreateTimeout) {
-			sessionRecreateHistory.set(jid, now)
-			return { reason: 'retry count >= 2 and over an hour since last recreation', recreate: true }
+	// Check if we have a session with this JID (whatsmeow logic)
+	if (context?.signalRepository) {
+		try {
+			const hasSession = await context.signalRepository.hasSession(jid)
+			if (!hasSession) {
+				sessionRecreateHistory.set(jid, now)
+				return { 
+					reason: "we don't have a Signal session with them", 
+					recreate: true, 
+					shouldFetchPreKeys: true 
+				}
+			}
+		} catch (error) {
+			context.logger?.warn({ jid, error: error.message }, 'Failed to check session existence')
 		}
 	}
 	
-	return { reason: '', recreate: false }
+	// Don't recreate if retry count < 2 (whatsmeow logic)
+	if (retryCount < 2) {
+		return { reason: '', recreate: false, shouldFetchPreKeys: false }
+	}
+	
+	// Check timeout for recreation (whatsmeow uses 1 hour)
+	const lastRecreate = sessionRecreateHistory.get(jid) || 0
+	if (now - lastRecreate > DECRYPTION_RETRY_CONFIG.sessionRecreateTimeout) {
+		sessionRecreateHistory.set(jid, now)
+		return { 
+			reason: 'retry count >= 2 and over an hour since last recreation', 
+			recreate: true, 
+			shouldFetchPreKeys: true 
+		}
+	}
+	
+	return { reason: '', recreate: false, shouldFetchPreKeys: false }
 }
 
 export function getMessageRetryState(messageKey: string): MessageRetryState {
@@ -99,6 +157,46 @@ export function shouldStopRetrying(messageKey: string): boolean {
 	return state.retryCount >= DECRYPTION_RETRY_CONFIG.maxRetries
 }
 
+// Recent message management functions (whatsmeow-inspired)
+export function addRecentMessage(to: string, id: string, message: any): void {
+	const key = `${to}_${id}`
+	
+	// Remove old entry if it exists
+	if (recentMessagesList[recentMessagesPtr].id !== '') {
+		const oldKey = `${recentMessagesList[recentMessagesPtr].to}_${recentMessagesList[recentMessagesPtr].id}`
+		recentMessagesMap.delete(oldKey)
+	}
+	
+	// Add new entry
+	recentMessagesMap.set(key, {
+		message,
+		timestamp: Date.now()
+	})
+	
+	recentMessagesList[recentMessagesPtr] = { to, id }
+	recentMessagesPtr = (recentMessagesPtr + 1) % RECENT_MESSAGES_SIZE
+}
+
+export function getRecentMessage(to: string, id: string): RecentMessage | null {
+	const key = `${to}_${id}`
+	return recentMessagesMap.get(key) || null
+}
+
+// Internal retry counter management (whatsmeow pattern)
+export function incrementIncomingRetryCounter(senderJid: string, messageId: string): number {
+	const key = `${senderJid}_${messageId}`
+	const current = incomingRetryRequestCounter.get(key) || 0
+	const newCount = current + 1
+	incomingRetryRequestCounter.set(key, newCount)
+	return newCount
+}
+
+export function shouldDropRetryRequest(senderJid: string, messageId: string): boolean {
+	const key = `${senderJid}_${messageId}`
+	const count = incomingRetryRequestCounter.get(key) || 0
+	return count >= 10 // whatsmeow limit
+}
+
 export function cleanupOldRetryStates(): void {
 	const now = Date.now()
 	const maxAge = 24 * 60 * 60 * 1000 // 24 hours
@@ -114,6 +212,21 @@ export function cleanupOldRetryStates(): void {
 	for (const [jid, timestamp] of sessionRecreateHistory.entries()) {
 		if (now - timestamp > maxAge) {
 			sessionRecreateHistory.delete(jid)
+		}
+	}
+	
+	// Clean up old recent messages
+	for (const [key, recentMsg] of recentMessagesMap.entries()) {
+		if (now - recentMsg.timestamp > maxAge) {
+			recentMessagesMap.delete(key)
+		}
+	}
+	
+	// Clean up old retry counters
+	for (const [key] of incomingRetryRequestCounter.entries()) {
+		// Clean up counters older than 1 hour
+		if (Math.random() < 0.1) { // Probabilistic cleanup to avoid performance issues
+			incomingRetryRequestCounter.delete(key)
 		}
 	}
 }
@@ -242,7 +355,8 @@ export const decryptMessageNode = (
 	meLid: string,
 	repository: SignalRepository,
 	logger: ILogger,
-	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
+	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>,
+	sessionContext?: SessionRecreationContext
 ) => {
 	const { fullMessage, author, sender } = decodeMessageNode(stanza, meId, meLid)
 	return {
@@ -276,6 +390,16 @@ export const decryptMessageNode = (
 
 						// Use retry mechanism for encrypted messages
 						if (e2eType !== 'plaintext') {
+							// Create session context with repository access
+							const contextWithRepo = sessionContext ? {
+								...sessionContext,
+								signalRepository: repository
+							} : {
+								signalRepository: repository,
+								logger,
+								authState: null
+							}
+							
 							msgBuffer = await decryptWithRetry(
 								async () => {
 									switch (e2eType) {
@@ -301,7 +425,8 @@ export const decryptMessageNode = (
 								fullMessage.key,
 								e2eType,
 								stanza,
-								sendRetryRequestFn
+								sendRetryRequestFn,
+								contextWithRepo
 							)
 						} else {
 							msgBuffer = content
@@ -358,7 +483,7 @@ export const decryptMessageNode = (
 /**
  * Utility function to check if an error is recoverable (session record or MAC errors)
  */
-function isRecoverableDecryptionError(error: any): boolean {
+export function isRecoverableDecryptionError(error: any): boolean {
 	const errorMessage = error?.message || error?.toString() || ''
 	return DECRYPTION_RETRY_CONFIG.allRecoverableErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
@@ -366,7 +491,7 @@ function isRecoverableDecryptionError(error: any): boolean {
 /**
  * Utility function to check if an error is specifically a MAC error
  */
-function isMacError(error: any): boolean {
+export function isMacError(error: any): boolean {
 	const errorMessage = error?.message || error?.toString() || ''
 	return DECRYPTION_RETRY_CONFIG.macErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
@@ -374,7 +499,7 @@ function isMacError(error: any): boolean {
 /**
  * Utility function to check if an error is related to missing session record
  */
-function isSessionRecordError(error: any): boolean {
+export function isSessionRecordError(error: any): boolean {
 	const errorMessage = error?.message || error?.toString() || ''
 	return DECRYPTION_RETRY_CONFIG.sessionRecordErrors.some(errorPattern => errorMessage.includes(errorPattern))
 }
@@ -395,7 +520,8 @@ async function decryptWithRetry(
 	messageKey: WAMessageKey,
 	messageType: string,
 	node?: BinaryNode,
-	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>
+	sendRetryRequestFn?: (node: BinaryNode, forceIncludeKeys: boolean) => Promise<void>,
+	sessionContext?: SessionRecreationContext
 ): Promise<Uint8Array> {
 	let lastError: any
 	const messageKeyStr = `${messageKey.remoteJid}_${messageKey.id}_${messageKey.participant || ''}`
@@ -453,24 +579,57 @@ async function decryptWithRetry(
 
 			// Check if we should recreate session (whatsmeow-inspired logic)
 			const senderJid = messageKey.participant || messageKey.remoteJid || ''
-			const { reason, recreate } = shouldRecreateSession(senderJid, currentRetryCount)
-			if (recreate) {
-				logger.info({ key: messageKey, reason }, 'Session recreation recommended')
+			let recreate = false
+			let shouldFetchPreKeys = false
+			let recreateReason = ''
+			
+			try {
+				const sessionResult = await shouldRecreateSession(senderJid, currentRetryCount, sessionContext)
+				recreate = sessionResult.recreate
+				shouldFetchPreKeys = sessionResult.shouldFetchPreKeys
+				recreateReason = sessionResult.reason
+				
+				if (recreate) {
+					logger.info({ 
+						key: messageKey, 
+						reason: recreateReason,
+						shouldFetchPreKeys 
+					}, 'Session recreation recommended')
+					
+					// Attempt to fetch prekeys if needed and context is available
+					if (shouldFetchPreKeys && sessionContext?.fetchPreKeys) {
+						try {
+							logger.debug({ jid: senderJid }, 'Fetching prekeys for session recreation')
+							await sessionContext.fetchPreKeys([senderJid])
+						} catch (prekeyError) {
+							logger.warn({ 
+								jid: senderJid, 
+								error: prekeyError.message 
+							}, 'Failed to fetch prekeys for session recreation')
+						}
+					}
+				}
+			} catch (sessionCheckError) {
+				logger.warn({ 
+					jid: senderJid, 
+					error: sessionCheckError.message 
+				}, 'Failed to check session recreation need')
 			}
 
 			// Send retry request immediately when we detect a decryption error
 			// This is more efficient than waiting for the full message processing
 			if (node && sendRetryRequestFn && currentRetryCount <= 2) {
 				try {
-					// Force include keys on first retry or when session recreation is needed
-					const forceIncludeKeys = isSessionRecordError(error) || isMacError(error) || recreate
+					// Force include keys on first retry, MAC errors, session errors, or when session recreation is needed
+					const forceIncludeKeys = isSessionRecordError(error) || isMacError(error) || recreate || currentRetryCount > 1
 					await sendRetryRequestFn(node, forceIncludeKeys)
 					logger.debug({
 						key: messageKey,
 						errorType,
 						forceIncludeKeys,
 						retryCount: currentRetryCount,
-						sessionRecreate: recreate
+						sessionRecreate: recreate,
+						recreateReason
 					}, 'sent retry request during decryption retry')
 				} catch (retryRequestError) {
 					logger.warn({

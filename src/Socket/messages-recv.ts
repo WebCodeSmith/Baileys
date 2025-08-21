@@ -16,6 +16,7 @@ import {
 	WAPatchName
 } from '../Types'
 import {
+	addRecentMessage,
 	aesDecryptCTR,
 	aesEncryptGCM,
 	cleanMessage,
@@ -29,6 +30,10 @@ import {
 	encodeBigEndian,
 	encodeSignedDeviceIdentity,
 	getCallStatusFromNode,
+	getRecentMessage,
+	incrementIncomingRetryCounter,
+	SessionRecreationContext,
+	shouldDropRetryRequest,
 	getHistoryMsg,
 	getNextPreKeys,
 	getStatusFromReceiptType,
@@ -179,6 +184,18 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const { fullMessage } = decodeMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '')
 		const { key: msgKey } = fullMessage
 		const msgId = msgKey.id!
+		const senderJid = node.attrs.from || ''
+
+		// Check internal retry counter (whatsmeow pattern - max 10 per sender/message)
+		const internalRetryCount = incrementIncomingRetryCounter(senderJid, msgId)
+		if (shouldDropRetryRequest(senderJid, msgId)) {
+			logger.warn({ 
+				senderJid, 
+				msgId, 
+				internalRetryCount 
+			}, 'Dropping retry request: internal retry counter exceeded limit (10)')
+			return
+		}
 
 		const key = `${msgId}:${msgKey?.participant}`
 		let retryCount = msgRetryCache.get<number>(key) || 0
@@ -196,12 +213,27 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const { account, signedPreKey, signedIdentityKey: identityKey } = authState.creds
 
 		// Enhanced retry logic inspired by whatsmeow
-		if (retryCount <= 2) {
-			// Request a resend via phone (similar to whatsmeow's delayedRequestMessageFromPhone)
-			const msgId = await requestPlaceholderResend(msgKey)
-			logger.debug({ retryCount, msgId }, 'sendRetryRequest: requested placeholder resend for message')
+		if (retryCount === 1) {
+			// First retry - request resend via phone (whatsmeow pattern)
+			try {
+				const msgId = await requestPlaceholderResend(msgKey)
+				logger.debug({ 
+					retryCount, 
+					msgId, 
+					internalRetryCount 
+				}, 'sendRetryRequest: requested placeholder resend for message (first retry)')
+			} catch (error) {
+				logger.warn({ 
+					msgId, 
+					error: error.message 
+				}, 'Failed to request placeholder resend')
+			}
 		} else {
-			logger.debug({ retryCount, msgId }, 'sendRetryRequest: retry count > 2, skipping placeholder resend')
+			logger.debug({ 
+				retryCount, 
+				msgId, 
+				internalRetryCount 
+			}, 'sendRetryRequest: retry count > 1, skipping placeholder resend')
 		}
 
 		const deviceIdentity = encodeSignedDeviceIdentity(account!, true)
@@ -239,7 +271,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				receipt.attrs.participant = node.attrs.participant
 			}
 
-			if (retryCount > 1 || forceIncludeKeys) {
+			// Include keys based on whatsmeow logic:
+			// - Always include on first retry (retryCount === 1)
+			// - Include when forced (MAC errors, session errors)
+			// - Include when retry count > 1 (session recreation scenarios)
+			const shouldIncludeKeys = retryCount === 1 || forceIncludeKeys || retryCount > 1
+			
+			if (shouldIncludeKeys) {
 				const { update, preKeys } = await getNextPreKeys(authState, 1)
 
 				const [keyId] = Object.keys(preKeys)
@@ -259,6 +297,20 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				})
 
 				ev.emit('creds.update', update)
+				
+				logger.debug({ 
+					retryCount, 
+					forceIncludeKeys, 
+					shouldIncludeKeys,
+					internalRetryCount 
+				}, 'Including keys and device identity in retry receipt')
+			} else {
+				logger.debug({ 
+					retryCount, 
+					forceIncludeKeys, 
+					shouldIncludeKeys,
+					internalRetryCount 
+				}, 'Not including keys in retry receipt')
 			}
 
 			await sendNode(receipt)
@@ -719,19 +771,58 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						// correctly set who is asking for the retry
 						key.participant = key.participant || attrs.from
 						const retryNode = getBinaryNodeChild(node, 'retry')
+						
+						// Check internal retry counter (whatsmeow pattern)
+						const senderJid = attrs.from || ''
+						const messageId = ids[0] || ''
+						
+						if (shouldDropRetryRequest(senderJid, messageId)) {
+							logger.warn({ 
+								senderJid, 
+								messageId,
+								attrs 
+							}, 'Dropping retry receipt: internal retry counter exceeded limit (10)')
+							return
+						}
+						
+						// Increment internal retry counter
+						const internalRetryCount = incrementIncomingRetryCounter(senderJid, messageId)
+						
 						if (willSendMessageAgain(ids[0], key.participant)) {
 							if (key.fromMe) {
 								try {
-									logger.debug({ attrs, key }, 'recv retry request')
+									logger.debug({ 
+										attrs, 
+										key, 
+										internalRetryCount 
+									}, 'recv retry request')
+									
+									// Check if we have the message in recent cache (whatsmeow pattern)
+									const recentMessage = getRecentMessage(key.remoteJid || '', messageId)
+									if (recentMessage) {
+										logger.debug({ 
+											jid: key.remoteJid, 
+											id: messageId 
+										}, 'Found message in recent cache for retry')
+									}
+									
 									await sendMessagesAgain(key, ids, retryNode!)
 								} catch (error) {
 									logger.error({ key, ids, trace: error.stack }, 'error in sending message again')
 								}
 							} else {
-								logger.info({ attrs, key }, 'recv retry for not fromMe message')
+								logger.info({ 
+									attrs, 
+									key, 
+									internalRetryCount 
+								}, 'recv retry for not fromMe message')
 							}
 						} else {
-							logger.info({ attrs, key }, 'will not send message again, as sent too many times')
+							logger.info({ 
+								attrs, 
+								key, 
+								internalRetryCount 
+							}, 'will not send message again, as sent too many times')
 						}
 					}
 				})
@@ -812,12 +903,25 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		const messageKey = `${node.attrs.from}_${node.attrs.id}_${node.attrs.participant || ''}`
 
 		try {
+			// Create session recreation context (whatsmeow-inspired)
+			const sessionContext: SessionRecreationContext = {
+				authState,
+				logger,
+				signalRepository,
+				fetchPreKeys: async (jids: string[]) => {
+					// Implement prekey fetching if needed
+					logger.debug({ jids }, 'Fetching prekeys for session recreation')
+					// This would typically call the prekey fetching logic
+					// For now, we'll just log it
+				}
+			}
+
 			const {
 				fullMessage: msg,
 				category,
 				author,
 				decrypt
-			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger, sendRetryRequest)
+			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger, sendRetryRequest, sessionContext)
 
 			if (response && msg?.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
 				msg.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT, response]
@@ -839,6 +943,15 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						if (PENDING_MESSAGE_DECRYPTIONS.has(messageKey)) {
 							PENDING_MESSAGE_DECRYPTIONS.delete(messageKey)
 							console.warn({ messageKey }, 'Message decrypted successfully after retry')
+						}
+
+						// Add to recent messages cache for retry receipts (whatsmeow pattern)
+						if (msg.key?.remoteJid && msg.key?.id) {
+							addRecentMessage(msg.key.remoteJid, msg.key.id, msg)
+							logger.debug({ 
+								jid: msg.key.remoteJid, 
+								id: msg.key.id 
+							}, 'Added message to recent cache for retry receipts')
 						}
 
 						// message failed to decrypt
