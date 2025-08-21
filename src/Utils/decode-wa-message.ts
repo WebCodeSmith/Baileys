@@ -480,7 +480,7 @@ async function decryptWithRetry(
 
 			// Send retry request immediately when we detect a decryption error
 			// This is more efficient than waiting for the full message processing
-			if (node && sendRetryRequestFn && attempt === 0) {
+			if (node && sendRetryRequestFn && attempt <= 1) {
 				try {
 					// Force include keys on first retry to help with session recovery
 					const forceIncludeKeys = isSessionRecordError(error) || isMacError(error)
