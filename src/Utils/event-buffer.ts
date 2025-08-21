@@ -67,7 +67,7 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
 /**
  * The event buffer logically consolidates different events into a single event
  * making the data processing more efficient.
- * @param ev the baileys event emitter
+ * @param logger the logger instance for debugging
  */
 export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter => {
 	const ev = new EventEmitter()
@@ -75,6 +75,28 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 	let data = makeBufferData()
 	let buffersInProgress = 0
+	let lastFlushAttempt = Date.now()
+	let flushTimeout: NodeJS.Timeout | null = null
+
+	// Safety mechanism: force flush if buffer is stuck for too long
+	const MAX_BUFFER_TIME = 45000 // 45 seconds
+
+	const scheduleForceFlush = () => {
+		if (flushTimeout) {
+			clearTimeout(flushTimeout)
+		}
+
+		flushTimeout = setTimeout(() => {
+			const timeSinceLastFlush = Date.now() - lastFlushAttempt
+			if (buffersInProgress > 0 && timeSinceLastFlush > MAX_BUFFER_TIME) {
+				logger.warn({
+					buffersInProgress,
+					timeSinceLastFlush
+				}, 'Force flushing stuck event buffer')
+				flush(true)
+			}
+		}, MAX_BUFFER_TIME)
+	}
 
 	// take the generic event and fire it as a baileys event
 	ev.on('event', (map: BaileysEventData) => {
@@ -85,6 +107,8 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 	function buffer() {
 		buffersInProgress += 1
+		logger.trace({ buffersInProgress }, 'buffer started')
+		scheduleForceFlush()
 	}
 
 	function flush(force = false) {
@@ -96,19 +120,43 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		if (!force) {
 			// reduce the number of buffers in progress
 			buffersInProgress -= 1
+			logger.trace({ buffersInProgress }, 'buffer decremented')
 			// if there are still some buffers going on
 			// then we don't flush now
 			if (buffersInProgress) {
 				return false
 			}
+		} else {
+			// Force flush - reset counter
+			logger.debug({ buffersInProgress }, 'force flushing, resetting buffer counter')
+			buffersInProgress = 0
 		}
+
+		// Clear the force flush timeout
+		if (flushTimeout) {
+			clearTimeout(flushTimeout)
+			flushTimeout = null
+		}
+
+		lastFlushAttempt = Date.now()
 
 		const newData = makeBufferData()
 		const chatUpdates = Object.values(data.chatUpdates)
 		// gather the remaining conditional events so we re-queue them
 		let conditionalChatUpdatesLeft = 0
+		let staleChatUpdatesRemoved = 0
+		const now = Date.now()
+
 		for (const update of chatUpdates) {
 			if (update.conditional) {
+				// Remove stale conditional updates (older than 5 minutes)
+				const updateAge = now - (update.timestamp || 0)
+				if (updateAge > 300000) { // 5 minutes
+					staleChatUpdatesRemoved += 1
+					logger.debug({ chatId: update.id, updateAge }, 'removing stale conditional chat update')
+					continue
+				}
+
 				conditionalChatUpdatesLeft += 1
 				newData.chatUpdates[update.id!] = update
 				delete data.chatUpdates[update.id!]
@@ -122,7 +170,11 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 		data = newData
 
-		logger.trace({ conditionalChatUpdatesLeft }, 'released buffered events')
+		logger.trace({
+			conditionalChatUpdatesLeft,
+			staleChatUpdatesRemoved,
+			buffersInProgress
+		}, 'released buffered events')
 
 		return true
 	}
@@ -154,11 +206,20 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		createBufferedFunction(work) {
 			return async (...args) => {
 				buffer()
+				let bufferReleased = false
+
 				try {
 					const result = await work(...args)
-					return result
-				} finally {
 					flush()
+					bufferReleased = true
+					return result
+				} catch (error) {
+					// Ensure buffer is always released, even on error
+					if (!bufferReleased) {
+						logger.warn({ error: error.message }, 'releasing buffer due to error in buffered function')
+						flush()
+					}
+					throw error
 				}
 			}
 		},
@@ -287,7 +348,8 @@ function append<E extends BufferableEvent>(
 						data.chatUpdates[chatId] = concatChats(chatUpdate, update)
 					}
 				} else if (conditionMatches === undefined) {
-					// condition yet to be fulfilled
+					// condition yet to be fulfilled - add timestamp for tracking
+					update.timestamp = update.timestamp || Date.now()
 					data.chatUpdates[chatId] = update
 				}
 				// otherwise -- condition not met, update is invalid
