@@ -1,6 +1,6 @@
 /* @ts-ignore */
 import * as libsignal from 'libsignal'
-import type { SignalAuthState } from '../Types'
+import type { SignalAuthState, SignalKeyStoreWithTransaction } from '../Types'
 import type { SignalRepository } from '../Types/Signal'
 import { generateSignalPubKey } from '../Utils'
 import { jidDecode } from '../WABinary'
@@ -12,7 +12,7 @@ import { GroupCipher, GroupSessionBuilder, SenderKeyDistributionMessage } from '
 export function makeLibSignalRepository(auth: SignalAuthState): SignalRepository {
 	const storage: SenderKeyStore = signalStorage(auth)
 
-	function isLikelySyncMessage(addr): boolean {
+	function isLikelySyncMessage(addr: any): boolean {
 		const key = addr.toString()
 
 		// Only bypass for WhatsApp system addresses, not regular user contacts

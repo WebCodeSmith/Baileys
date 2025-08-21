@@ -157,7 +157,6 @@ async function handlePreKeyOperations(
 				} else {
 					logger.warn(`Skipping deletion of non-existent ${keyType} in transaction: ${keyId}`)
 				}
-				}
 			}
 
 			return

@@ -32,7 +32,7 @@ import {
 	getCallStatusFromNode,
 	getRecentMessage,
 	incrementIncomingRetryCounter,
-	SessionRecreationContext,
+	type SessionRecreationContext,
 	shouldDropRetryRequest,
 	getHistoryMsg,
 	getNextPreKeys,
@@ -226,7 +226,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			} catch (error) {
 				logger.warn({ 
 					msgId, 
-					error: error.message 
+					error: (error as Error).message 
 				}, 'Failed to request placeholder resend')
 			}
 		} else {
