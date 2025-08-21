@@ -28,7 +28,8 @@ import {
 	getWAUploadToServer,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
-	unixTimestampSeconds
+	unixTimestampSeconds,
+	fetchPreKeys
 } from '../Utils'
 import { getUrlInfo } from '../Utils/link-preview'
 import {
@@ -257,27 +258,16 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 		if (jidsRequiringFetch.length) {
 			logger.debug({ jidsRequiringFetch }, 'fetching sessions')
-			const result = await query({
-				tag: 'iq',
-				attrs: {
-					xmlns: 'encrypt',
-					type: 'get',
-					to: S_WHATSAPP_NET
-				},
-				content: [
-					{
-						tag: 'key',
-						attrs: {},
-						content: jidsRequiringFetch.map(jid => ({
-							tag: 'user',
-							attrs: { jid }
-						}))
-					}
-				]
-			})
-			await parseAndInjectE2ESessions(result, signalRepository)
-
-			didFetchNewSession = true
+			
+			// Use the new fetchPreKeys function for consistency with whatsmeow
+			const success = await fetchPreKeys(
+				jidsRequiringFetch,
+				query,
+				signalRepository,
+				logger
+			)
+			
+			didFetchNewSession = success
 		}
 
 		return didFetchNewSession

@@ -908,12 +908,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				authState,
 				logger,
 				signalRepository,
-				fetchPreKeys: async (jids: string[]) => {
-					// Implement prekey fetching if needed
-					logger.debug({ jids }, 'Fetching prekeys for session recreation')
-					// This would typically call the prekey fetching logic
-					// For now, we'll just log it
-				}
+				query
 			}
 
 			const {

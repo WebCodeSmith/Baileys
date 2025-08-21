@@ -14,6 +14,7 @@ import {
 } from '../WABinary'
 import { unpadRandomMax16 } from './generics'
 import { ILogger } from './logger'
+import { fetchPreKeys } from './signal'
 
 export const NO_MESSAGE_FOUND_ERROR_TEXT = 'Message absent from node'
 export const MISSING_KEYS_ERROR_TEXT = 'Key used already or never filled'
@@ -87,7 +88,7 @@ export interface SessionRecreationContext {
 	authState: any
 	logger: any
 	signalRepository: any
-	fetchPreKeys?: (jids: string[]) => Promise<any>
+	query: (node: BinaryNode) => Promise<BinaryNode>
 }
 
 // Smart retry control functions (inspired by whatsmeow)
@@ -132,6 +133,38 @@ export async function shouldRecreateSession(
 	}
 	
 	return { reason: '', recreate: false, shouldFetchPreKeys: false }
+}
+
+/**
+ * Execute session recreation by fetching prekeys
+ * Inspired by whatsmeow's session recreation logic
+ */
+export async function executeSessionRecreation(
+	jid: string,
+	context: SessionRecreationContext
+): Promise<boolean> {
+	try {
+		context.logger?.debug({ jid }, 'executing session recreation with prekey fetch')
+		
+		// Use the new fetchPreKeys function
+		const success = await fetchPreKeys(
+			[jid],
+			context.query,
+			context.signalRepository,
+			context.logger
+		)
+		
+		if (success) {
+			context.logger?.debug({ jid }, 'session recreation completed successfully')
+		} else {
+			context.logger?.warn({ jid }, 'session recreation failed')
+		}
+		
+		return success
+	} catch (error) {
+		context.logger?.error({ jid, error: error.message }, 'session recreation failed with error')
+		return false
+	}
 }
 
 export function getMessageRetryState(messageKey: string): MessageRetryState {
@@ -394,11 +427,7 @@ export const decryptMessageNode = (
 							const contextWithRepo = sessionContext ? {
 								...sessionContext,
 								signalRepository: repository
-							} : {
-								signalRepository: repository,
-								logger,
-								authState: null
-							}
+							} : undefined
 							
 							msgBuffer = await decryptWithRetry(
 								async () => {
@@ -596,16 +625,20 @@ async function decryptWithRetry(
 						shouldFetchPreKeys 
 					}, 'Session recreation recommended')
 					
-					// Attempt to fetch prekeys if needed and context is available
-					if (shouldFetchPreKeys && sessionContext?.fetchPreKeys) {
+					// Execute session recreation with prekey fetching
+					if (shouldFetchPreKeys && sessionContext) {
 						try {
-							logger.debug({ jid: senderJid }, 'Fetching prekeys for session recreation')
-							await sessionContext.fetchPreKeys([senderJid])
+							const success = await executeSessionRecreation(senderJid, sessionContext)
+							if (success) {
+								logger.debug({ jid: senderJid }, 'Session recreation completed successfully')
+							} else {
+								logger.warn({ jid: senderJid }, 'Session recreation failed')
+							}
 						} catch (prekeyError) {
 							logger.warn({ 
 								jid: senderJid, 
 								error: prekeyError.message 
-							}, 'Failed to fetch prekeys for session recreation')
+							}, 'Failed to execute session recreation')
 						}
 					}
 				}
