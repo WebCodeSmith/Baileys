@@ -983,9 +983,17 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							console.warn({ messageKey }, 'Message decrypted successfully after retry')
 						}
 
-						// Note: addRecentMessage is now called only on outgoing messages in messages-send.ts
-						// This follows WhatsmeOW pattern where only sent messages are cached for retry receipts
-
+						if (msg.key?.remoteJid && msg.key?.id) {
+							addRecentMessage(msg.key.remoteJid, msg.key.id, msg)
+							logger.debug(
+								{
+									jid: msg.key.remoteJid,
+									id: msg.key.id
+								},
+								'Added message to recent cache for retry receipts'
+							)
+						}
+						
 						// message failed to decrypt
 						if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
 							if (msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {
