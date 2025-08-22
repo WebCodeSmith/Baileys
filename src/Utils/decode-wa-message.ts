@@ -211,19 +211,19 @@ export function getRecentMessage(to: string, id: string): RecentMessage | null {
 	return recentMessagesMap.get(key) || null
 }
 
-// WhatsmeOW-compatible message retrieval for retry receipts
-export function getMessageForRetry(to: string, id: string, getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>): Promise<proto.IMessage | null> {
+export async function getMessageForRetry(to: string, id: string, getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>): Promise<proto.IMessage | null> {
 	// First, try to get from recent messages cache (whatsmeow pattern)
 	const recentMsg = getRecentMessage(to, id)
 	if (recentMsg?.message) {
 		return Promise.resolve(recentMsg.message)
 	}
-	
+
 	// If not in cache and getMessage callback is provided, use it
 	if (getMessage) {
-		return getMessage({ remoteJid: to, id }).then(msg => msg || null)
+		let msg = await getMessage({remoteJid: to, id});
+		return msg || null;
 	}
-	
+
 	return Promise.resolve(null)
 }
 
