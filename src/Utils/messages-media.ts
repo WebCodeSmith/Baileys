@@ -106,10 +106,24 @@ export async function getMediaKeys(
 	}
 
 	// 🔧 Fix para otimizações protobuf: Corrigir mediaKey serializada incorretamente
-	if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
-		// MediaKey foi serializada como {data: [1,2,3...]} ao invés de Uint8Array
-		console.warn('🔧 MediaKey corrompida detectada - reconstruindo Uint8Array a partir de array serializado');
-		buffer = new Uint8Array((buffer as any).data);
+	if (buffer && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
+		// Caso 1: MediaKey serializada como {data: [1,2,3...]}
+		if ('data' in buffer && Array.isArray((buffer as any).data)) {
+			buffer = new Uint8Array((buffer as any).data);
+		}
+		// Caso 2: MediaKey serializada diretamente como Array
+		else if (Array.isArray(buffer)) {
+			buffer = new Uint8Array(buffer);
+		}
+		// Caso 3: Objeto com propriedades numéricas (array-like)
+		else if (typeof buffer === 'object' && buffer !== null) {
+			const keys = Object.keys(buffer);
+			const isArrayLike = keys.every(key => !isNaN(Number(key)));
+			if (isArrayLike && keys.length > 0) {
+				const values = keys.map(key => (buffer as any)[key]);
+				buffer = new Uint8Array(values);
+			}
+		}
 	}
 	
 	// Garantir que é um Uint8Array válido
