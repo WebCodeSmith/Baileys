@@ -105,6 +105,18 @@ export async function getMediaKeys(
 		buffer = Buffer.from(buffer.replace('data:;base64,', ''), 'base64')
 	}
 
+	// 🔧 Fix para otimizações protobuf: Corrigir mediaKey serializada incorretamente
+	if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
+		// MediaKey foi serializada como {data: [1,2,3...]} ao invés de Uint8Array
+		console.warn('🔧 MediaKey corrompida detectada - reconstruindo Uint8Array a partir de array serializado');
+		buffer = new Uint8Array((buffer as any).data);
+	}
+	
+	// Garantir que é um Uint8Array válido
+	if (!(buffer instanceof Uint8Array) && !Buffer.isBuffer(buffer)) {
+		throw new Boom('MediaKey must be Uint8Array or Buffer')
+	}
+
 	// expand using HKDF to 112 bytes, also pass in the relevant app info
 	const expandedMediaKey = await hkdf(buffer, 112, { info: hkdfInfoKey(mediaType) })
 	return {
