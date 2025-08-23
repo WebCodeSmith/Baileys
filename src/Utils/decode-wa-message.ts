@@ -10,21 +10,61 @@ import {
 	isJidNewsletter,
 	isJidStatusBroadcast,
 	isJidUser,
-	isLidUser
+	isLidUser,
+	jidDecode,
+	jidEncode,
+	jidNormalizedUser
 } from '../WABinary'
 import { unpadRandomMax16 } from './generics'
 import type { ILogger } from './logger'
 import { fetchPreKeys } from './signal'
+
+const getDecryptionJid = async (sender: string, repository: SignalRepository): Promise<string> => {
+	if (!sender.includes('@s.whatsapp.net')) {
+		return sender
+	}
+
+	const lidMapping = repository.getLIDMappingStore()
+	const normalizedSender = jidNormalizedUser(sender)
+	const lidForPN = await lidMapping.getLIDForPN(normalizedSender)
+
+	if (lidForPN?.includes('@lid')) {
+		const senderDecoded = jidDecode(sender)
+		const deviceId = senderDecoded?.device || 0
+		return jidEncode(jidDecode(lidForPN)!.user, 'lid', deviceId)
+	}
+
+	return sender
+}
+
+const storeMappingFromEnvelope = async (
+	stanza: BinaryNode,
+	sender: string,
+	decryptionJid: string,
+	repository: SignalRepository,
+	logger: ILogger
+): Promise<void> => {
+	const { senderAlt } = extractAddressingContext(stanza)
+
+	if (senderAlt && isLidUser(senderAlt) && isJidUser(sender) && decryptionJid === sender) {
+		try {
+			await repository.storeLIDPNMapping(senderAlt, sender)
+			logger.debug({ sender, senderAlt }, 'Stored LID mapping from envelope')
+		} catch (error) {
+			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
+		}
+	}
+}
 
 export const NO_MESSAGE_FOUND_ERROR_TEXT = 'Message absent from node'
 export const MISSING_KEYS_ERROR_TEXT = 'Key used already or never filled'
 
 // Retry configuration for failed decryption (inspired by whatsmeow)
 export const DECRYPTION_RETRY_CONFIG = {
-	maxRetries: 5, // Maximum retry attempts (same as whatsmeow)
-	baseDelayMs: 100,
-	sessionRecreateTimeout: 60 * 60 * 1000, // 1 hour timeout for session recreation
-	requestFromPhoneDelay: 5000, // 5 seconds delay before requesting from phone
+	maxRetries: 8, // Aumentar tentativas para casos difíceis  
+	baseDelayMs: 500, // Delay maior para dar tempo ao WhatsApp
+	sessionRecreateTimeout: 5 * 60 * 1000, // 5 minutos ao invés de 1 hora
+	requestFromPhoneDelay: 3000, // Reduzir para 3 segundos
 	sessionRecordErrors: [
 		'No session record',
 		'Session record not found',
@@ -104,8 +144,8 @@ export async function shouldRecreateSession(
 		}
 	}
 
-	// Don't recreate if retry count < 2 (whatsmeow logic)
-	if (retryCount < 2) {
+	// Recreate earlier for session errors (modificado para ser mais agressivo)
+	if (retryCount < 1) {
 		return { reason: '', recreate: false, shouldFetchPreKeys: false }
 	}
 
@@ -292,6 +332,28 @@ type MessageType =
 	| 'other_status'
 	| 'newsletter'
 
+	export const extractAddressingContext = (stanza: BinaryNode) => {
+		const addressingMode = stanza.attrs.addressing_mode || 'pn'
+		let senderAlt: string | undefined
+		let recipientAlt: string | undefined
+	
+		if (addressingMode === 'lid') {
+			// Message is LID-addressed: sender is LID, extract corresponding PN
+			senderAlt = stanza.attrs.participant_pn || stanza.attrs.sender_pn
+			recipientAlt = stanza.attrs.recipient_pn
+		} else {
+			// Message is PN-addressed: sender is PN, extract corresponding LID
+			senderAlt = stanza.attrs.participant_lid || stanza.attrs.sender_lid
+			recipientAlt = stanza.attrs.recipient_lid
+		}
+	
+		return {
+			addressingMode,
+			senderAlt,
+			recipientAlt
+		}
+	}
+
 /**
  * Decode the received node as a message.
  * @note this will only parse the message, not decrypt it
@@ -405,7 +467,7 @@ export const decryptMessageNode = (
 				for (const { tag, attrs, content } of stanza.content) {
 					if (tag === 'verified_name' && content instanceof Uint8Array) {
 						const cert = proto.VerifiedNameCertificate.decode(content)
-						const details = proto.VerifiedNameCertificate.Details.decode(cert.details!)
+						const details = proto.VerifiedNameCertificate.Details.decode(cert.details)
 						fullMessage.verifiedBizName = details.verifiedName
 					}
 
@@ -450,11 +512,14 @@ export const decryptMessageNode = (
 										case 'pkmsg':
 										case 'msg':
 											const user = isJidUser(sender) ? sender : author
+											const decryptionJid = await getDecryptionJid(user, repository)
 											return await repository.decryptMessage({
-												jid: user,
+												jid: decryptionJid,
 												type: e2eType,
 												ciphertext: content
 											})
+
+											await storeMappingFromEnvelope(stanza, user, decryptionJid, repository, logger)
 										default:
 											throw new Error(`Unknown e2e type: ${e2eType}`)
 									}

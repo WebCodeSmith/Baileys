@@ -183,6 +183,7 @@ export const fetchPreKeys = async (
 		logger?.error({ jids, error }, 'failed to fetch prekeys')
 		return false
 	}
+
 }
 
 export const extractDeviceJids = (result: USyncQueryResultList[], myJid: string, excludeZeroDevices: boolean) => {

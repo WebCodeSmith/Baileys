@@ -95,8 +95,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			timestamp: number
 		}
 	>()
-	const MAX_DECRYPT_RETRY_COUNT = 3
-	const DECRYPT_RETRY_DELAY = 2000
+	const MAX_DECRYPT_RETRY_COUNT = 6  // Aumentar tentativas na queue
+	const DECRYPT_RETRY_DELAY = 3000   // Delay maior para estabilidade
 
 	/** this mutex ensures that each retryRequest will wait for the previous one to finish */
 	const retryMutex = makeMutex()
@@ -892,7 +892,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						msg.participant ??= node.attrs.participant
 						msg.messageTimestamp = +node.attrs.t!
 
-						const fullMsg = proto.WebMessageInfo.fromObject(msg)
+						const fullMsg = proto.WebMessageInfo.create(msg as proto.IWebMessageInfo)
 						await upsertMessage(fullMsg, 'append')
 					}
 				})
@@ -972,6 +972,45 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				ev.emit('chats.phoneNumberShare', { lid: node.attrs.from!, jid: node.attrs.sender_pn })
 			}
 
+			if (msg.message?.protocolMessage?.lidMigrationMappingSyncMessage?.encodedMappingPayload) {
+				try {
+					const payload = msg.message.protocolMessage.lidMigrationMappingSyncMessage.encodedMappingPayload
+					const decoded = proto.LIDMigrationMappingSyncPayload.decode(payload)
+	
+					logger.debug(
+						{
+							mappingCount: decoded.pnToLidMappings?.length || 0,
+							timestamp: decoded.chatDbMigrationTimestamp
+						},
+						'Received LID migration sync message from server'
+					)
+	
+					const lidMapping = signalRepository.getLIDMappingStore()
+					if (decoded.pnToLidMappings && decoded.pnToLidMappings.length > 0) {
+						for (const mapping of decoded.pnToLidMappings) {
+							const pn = `${mapping.pn}@s.whatsapp.net`
+							// Use latestLid if available, otherwise assignedLid (proper LID refresh)
+							const lidValue = mapping.latestLid || mapping.assignedLid
+							const lid = `${lidValue}@lid`
+	
+							await lidMapping.storeLIDPNMapping(lid, pn)
+							logger.debug(
+								{
+									pn,
+									lid,
+									assignedLid: mapping.assignedLid,
+									latestLid: mapping.latestLid,
+									usedLatest: !!mapping.latestLid
+								},
+								'Stored server-provided PN-LID mapping'
+							)
+						}
+					}
+				} catch (error) {
+					logger.error({ error }, 'Failed to process LID migration sync message')
+				}
+			}
+			
 			await Promise.all([
 				processingMutex.mutex(async () => {
 					try {
@@ -1457,7 +1496,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 								? Buffer.from(plaintextNode.content, 'binary')
 								: Buffer.from(plaintextNode.content as Uint8Array)
 						const messageProto = proto.Message.decode(contentBuf)
-						const fullMessage = proto.WebMessageInfo.fromObject({
+						const fullMessage = proto.WebMessageInfo.create({
 							key: {
 								remoteJid: from,
 								id: child.attrs.message_id || child.attrs.server_id,
@@ -1588,7 +1627,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				msg.message = { call: { callKey: Buffer.from(call.id) } }
 			}
 
-			const protoMsg = proto.WebMessageInfo.fromObject(msg)
+			const protoMsg = proto.WebMessageInfo.create(msg)
 			upsertMessage(protoMsg, call.offline ? 'append' : 'notify')
 		}
 	})
