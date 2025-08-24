@@ -107,15 +107,19 @@ export async function getMediaKeys(
 
 	// 🔧 Fix para otimizações protobuf: Corrigir mediaKey serializada incorretamente
 	if (buffer && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-		// Caso 1: MediaKey serializada como {data: [1,2,3...]}
-		if ('data' in buffer && Array.isArray((buffer as any).data)) {
+		// Caso 1: MediaKey serializada como {type: 'Buffer', data: 'base64...'}
+		if ('type' in buffer && (buffer as any).type === 'Buffer' && 'data' in buffer) {
+			buffer = Buffer.from((buffer as any).data, 'base64');
+		}
+		// Caso 2: MediaKey serializada como {data: [1,2,3...]}
+		else if ('data' in buffer && Array.isArray((buffer as any).data)) {
 			buffer = new Uint8Array((buffer as any).data);
 		}
-		// Caso 2: MediaKey serializada diretamente como Array
+		// Caso 3: MediaKey serializada diretamente como Array
 		else if (Array.isArray(buffer)) {
 			buffer = new Uint8Array(buffer);
 		}
-		// Caso 3: Objeto com propriedades numéricas (array-like)
+		// Caso 4: Objeto com propriedades numéricas (array-like)
 		else if (typeof buffer === 'object' && buffer !== null) {
 			const keys = Object.keys(buffer);
 			const isArrayLike = keys.every(key => !isNaN(Number(key)));
