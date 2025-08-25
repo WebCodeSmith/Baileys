@@ -2,7 +2,6 @@ import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import { URL } from 'url'
 import { promisify } from 'util'
-import { init as initWasm } from 'whatsapp-rust-bridge/binary'
 import { proto } from '../../WAProto/index.js'
 import {
 	DEF_CALLBACK_PREFIX,
@@ -50,6 +49,7 @@ import { WebSocketClient } from './Client'
  * - listen to messages and emit events
  * - query phone connection
  */
+
 export const makeSocket = (config: SocketConfig) => {
 	const {
 		waWebSocketUrl,
@@ -64,8 +64,6 @@ export const makeSocket = (config: SocketConfig) => {
 		qrTimeout,
 		makeSignalRepository
 	} = config
-
-	initWasm()
 
 	if (printQRInTerminal) {
 		console.warn(
@@ -306,7 +304,7 @@ export const makeSocket = (config: SocketConfig) => {
 			anyTriggered = ws.emit('frame', frame)
 			// if it's a binary node
 			if (!(frame instanceof Uint8Array)) {
-				const msgId = frame.attrs?.id
+				const msgId = frame.attrs.id
 
 				if (logger.level === 'trace') {
 					logger.trace({ xml: binaryNodeToString(frame), msg: 'recv xml' })
@@ -597,12 +595,10 @@ export const makeSocket = (config: SocketConfig) => {
 				return
 			}
 
-			if (refNode.content instanceof Uint8Array) {
-				const ref = Buffer.from(refNode.content).toString('utf-8')
-				const qr = [ref, noiseKeyB64, identityKeyB64, advB64].join(',')
+			const ref = (refNode.content as Buffer).toString('utf-8')
+			const qr = [ref, noiseKeyB64, identityKeyB64, advB64].join(',')
 
-				ev.emit('connection.update', { qr })
-			}
+			ev.emit('connection.update', { qr })
 
 			qrTimer = setTimeout(genPairQR, qrMs)
 			qrMs = qrTimeout || 20_000 // shorter subsequent qrs

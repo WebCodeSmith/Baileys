@@ -398,7 +398,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					ev.emit('chats.update', [
 						{
 							id: jid,
-							tcToken: content instanceof Uint8Array ? content : undefined
+							tcToken: content as Buffer
 						}
 					])
 

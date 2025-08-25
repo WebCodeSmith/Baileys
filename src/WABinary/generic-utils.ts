@@ -26,10 +26,10 @@ export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: strin
 	}
 }
 
-export const getBinaryNodeChildBuffer = (node: BinaryNode | undefined, childTag: string): Buffer | undefined => {
+export const getBinaryNodeChildBuffer = (node: BinaryNode | undefined, childTag: string) => {
 	const child = getBinaryNodeChild(node, childTag)?.content
 	if (Buffer.isBuffer(child) || child instanceof Uint8Array) {
-		return Buffer.from(child)
+		return child
 	}
 }
 
@@ -78,7 +78,7 @@ export const getBinaryNodeMessages = ({ content }: BinaryNode) => {
 	if (Array.isArray(content)) {
 		for (const item of content) {
 			if (item.tag === 'message') {
-				msgs.push(proto.WebMessageInfo.decode(item.content as Uint8Array))
+				msgs.push(proto.WebMessageInfo.decode(item.content as Buffer))
 			}
 		}
 	}
@@ -95,35 +95,33 @@ function bufferToUInt(e: Uint8Array | Buffer, t: number) {
 	return a
 }
 
-export function binaryNodeToString(node: BinaryNode | BinaryNode['content']): string {
+const tabs = (n: number) => '\t'.repeat(n)
+
+export function binaryNodeToString(node: BinaryNode | BinaryNode['content'], i = 0): string {
 	if (!node) {
 		return node!
 	}
 
-	if (typeof node !== 'object') {
-		return ' ' + String(node)
+	if (typeof node === 'string') {
+		return tabs(i) + node
 	}
 
-	if (node instanceof Uint8Array || Buffer.isBuffer(node)) {
-		return ' ' + Buffer.from(node).toString('hex')
+	if (node instanceof Uint8Array) {
+		return tabs(i) + Buffer.from(node).toString('hex')
 	}
 
 	if (Array.isArray(node)) {
-		return node.map(x => binaryNodeToString(x)).join(' ')
+		return node.map(x => tabs(i + 1) + binaryNodeToString(x, i + 1)).join('\n')
 	}
 
-	const children = node.content ? `${binaryNodeToString(node.content)}` : ''
+	const children = binaryNodeToString(node.content, i + 1)
 
-	let tag = `<${node.tag}`
-	for (const [k, v] of Object.entries(node.attrs || {})) {
-		if (typeof v !== 'undefined' && v !== null) {
-			tag += ` ${k}='${v}'`
-		}
-	}
+	const tag = `<${node.tag} ${Object.entries(node.attrs || {})
+		.filter(([, v]) => v !== undefined)
+		.map(([k, v]) => `${k}='${v}'`)
+		.join(' ')}`
 
-	if (children) {
-		return `${tag}>${children}</${node.tag}>`
-	} else {
-		return `${tag}/>`
-	}
+	const content: string = children ? `>\n${children}\n${tabs(i)}</${node.tag}>` : '/>'
+
+	return tag + content
 }
