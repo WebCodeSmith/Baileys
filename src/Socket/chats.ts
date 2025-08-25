@@ -1110,7 +1110,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		ev.buffer()
 
 		const willSyncHistory = shouldSyncHistoryMessage(
-			proto.Message.HistorySyncNotification.create({
+			proto.Message.HistorySyncNotification.fromObject({
 				syncType: proto.HistorySync.HistorySyncType.RECENT
 			})
 		)

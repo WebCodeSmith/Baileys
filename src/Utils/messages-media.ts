@@ -105,36 +105,6 @@ export async function getMediaKeys(
 		buffer = Buffer.from(buffer.replace('data:;base64,', ''), 'base64')
 	}
 
-	// 🔧 Fix para otimizações protobuf: Corrigir mediaKey serializada incorretamente
-	if (buffer && typeof buffer === 'object' && !Buffer.isBuffer(buffer) && !(buffer instanceof Uint8Array)) {
-		// Caso 1: MediaKey serializada como {type: 'Buffer', data: 'base64...'}
-		if ('type' in buffer && (buffer as any).type === 'Buffer' && 'data' in buffer) {
-			buffer = Buffer.from((buffer as any).data, 'base64');
-		}
-		// Caso 2: MediaKey serializada como {data: [1,2,3...]}
-		else if ('data' in buffer && Array.isArray((buffer as any).data)) {
-			buffer = new Uint8Array((buffer as any).data);
-		}
-		// Caso 3: MediaKey serializada diretamente como Array
-		else if (Array.isArray(buffer)) {
-			buffer = new Uint8Array(buffer);
-		}
-		// Caso 4: Objeto com propriedades numéricas (array-like)
-		else if (typeof buffer === 'object' && buffer !== null) {
-			const keys = Object.keys(buffer);
-			const isArrayLike = keys.every(key => !isNaN(Number(key)));
-			if (isArrayLike && keys.length > 0) {
-				const values = keys.map(key => (buffer as any)[key]);
-				buffer = new Uint8Array(values);
-			}
-		}
-	}
-	
-	// Garantir que é um Uint8Array válido
-	if (!(buffer instanceof Uint8Array) && !Buffer.isBuffer(buffer)) {
-		throw new Boom('MediaKey must be Uint8Array or Buffer')
-	}
-
 	// expand using HKDF to 112 bytes, also pass in the relevant app info
 	const expandedMediaKey = await hkdf(buffer, 112, { info: hkdfInfoKey(mediaType) })
 	return {
@@ -295,7 +265,7 @@ export async function getAudioWaveform(buffer: Buffer | string | Readable, logge
 			const blockStart = blockSize * i // the location of the first sample in the block
 			let sum = 0
 			for (let j = 0; j < blockSize; j++) {
-				sum = sum + Math.abs(rawData[blockStart + j] || 0) // find the sum of all the samples in the block
+				sum = sum + Math.abs(rawData[blockStart + j]) // find the sum of all the samples in the block
 			}
 
 			filteredData.push(sum / blockSize) // divide the sum by the block size to get the average

@@ -72,9 +72,6 @@ export type ChatUpdate = Partial<
 		 * undefined if the condition is not yet fulfilled
 		 * */
 		conditional: (bufferedData: BufferedEventData) => boolean | undefined
-
-		/** last update time */
-		timestamp?: number
 	}
 >
 
