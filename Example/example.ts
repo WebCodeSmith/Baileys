@@ -247,7 +247,7 @@ const startSock = async() => {
 			// up to you
 
 		// only if store is present
-		return proto.Message.create({ conversation: 'test' })
+		return proto.Message.fromObject({ conversation: 'test' })
 	}
 }
 
