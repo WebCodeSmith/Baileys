@@ -30,7 +30,7 @@ export type BaileysEventMap = {
 	'chats.upsert': Chat[]
 	/** update the given chats */
 	'chats.update': ChatUpdate[]
-	'lid-mapping.update': { lid: string; pn: string }
+	'chats.phoneNumberShare': { lid: string; jid: string }
 	/** delete chats with given ID */
 	'chats.delete': string[]
 	/** presence of contact in a chat updated */

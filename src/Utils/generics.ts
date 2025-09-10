@@ -3,7 +3,8 @@ import axios, { type AxiosRequestConfig } from 'axios'
 import { createHash, randomBytes } from 'crypto'
 import { platform, release } from 'os'
 import { proto } from '../../WAProto/index.js'
-const baileysVersion = [2, 3000, 1023223821]
+import version from '../Defaults/baileys-version.json' with { type: 'json' }
+const baileysVersion = version.version
 import type {
 	BaileysEventEmitter,
 	BaileysEventMap,
@@ -70,7 +71,7 @@ export const getKeyAuthor = (key: proto.IMessageKey | undefined | null, meId = '
 export const writeRandomPadMax16 = (msg: Uint8Array) => {
 	const pad = randomBytes(1)
 	const padLength = (pad[0]! & 0x0f) + 1
-
+	
 	return Buffer.concat([msg, Buffer.alloc(padLength, padLength)])
 }
 
@@ -245,27 +246,15 @@ export const bindWaitForConnectionUpdate = (ev: BaileysEventEmitter) => bindWait
  * Use to ensure your WA connection is always on the latest version
  */
 export const fetchLatestBaileysVersion = async (options: AxiosRequestConfig<{}> = {}) => {
-	const URL = 'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/index.ts'
+	const URL = 'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json'
 	try {
-		const result = await axios.get<string>(URL, {
+		const result = await axios.get<{ version: WAVersion }>(URL, {
 			...options,
-			responseType: 'text'
+			responseType: 'json'
 		})
-
-		// Extract version from line 7 (const version = [...])
-		const lines = result.data.split('\n')
-		const versionLine = lines[6] // Line 7 (0-indexed)
-		const versionMatch = versionLine!.match(/const version = \[(\d+),\s*(\d+),\s*(\d+)\]/)
-
-		if (versionMatch) {
-			const version = [parseInt(versionMatch[1]!), parseInt(versionMatch[2]!), parseInt(versionMatch[3]!)] as WAVersion
-
-			return {
-				version,
-				isLatest: true
-			}
-		} else {
-			throw new Error('Could not parse version from Defaults/index.ts')
+		return {
+			version: result.data.version,
+			isLatest: true
 		}
 	} catch (error) {
 		return {
